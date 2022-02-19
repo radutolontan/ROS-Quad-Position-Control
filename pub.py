@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 from quad_properties_PM import *
 # from quad_dynamics_PM import quad_dyn_PM
 from quad_trajectory_PM import circular_traj, corner_traj, set_point
+from time import sleep
 
 # Select desired quadrotor type and create its object
 m,A, B, C, Q, Qf, R, dR, uL, uU = falcon_white()
@@ -24,9 +25,8 @@ e3 = np.array([0,0,1])
 freq = 100
 N_MPC = 20
 F = np.array([0,0,15])
-N = 1000
-x = np.zeros((6,N+2))
-x_act = []
+N = 300
+x = np.zeros((6,1))
 
 
 odom_stored_msg = Odometry()
@@ -95,15 +95,17 @@ def circular_traj_pd(time):
 def mpc_control(des_traj, ref_properties):
     global odom_stored_msg, F, i, quadrotor, freq, N_MPC, x
     # states
-    xQ = np.array([odom_stored_msg.twist.twist.linear.x,
-                   odom_stored_msg.twist.twist.linear.y,
-                   odom_stored_msg.twist.twist.linear.z,
-                   odom_stored_msg.pose.pose.position.x, 
-                   odom_stored_msg.pose.pose.position.y,
-                   odom_stored_msg.pose.pose.position.z])
-    x[:,i] = xQ
+
+    XQ = np.array([[odom_stored_msg.twist.twist.linear.x],
+                   [odom_stored_msg.twist.twist.linear.y],
+                   [odom_stored_msg.twist.twist.linear.z],
+                   [odom_stored_msg.pose.pose.position.x], 
+                   [odom_stored_msg.pose.pose.position.y],
+                   [odom_stored_msg.pose.pose.position.z]])
+    x = np.hstack((x,XQ))
+    XQ = np.reshape(XQ, 6)
     # circular_traj
-    feas, xMPC, uMPC = quad_CFTOC(des_traj, ref_properties, quadrotor, N_MPC, i, freq, xQ, F)
+    feas, xMPC, uMPC = quad_CFTOC(des_traj, ref_properties, quadrotor, N_MPC, i, freq, XQ, F)
     print('POS: ', x[3:6,i])
     # control
     i += 1
@@ -134,21 +136,16 @@ def main():
         rospy.loginfo(thrust)
         pub.publish(thrust)
         rate.sleep() 
-    
-    # Change 10.48 back to 1.48
-    # Change while statement back to (x[5,i-1]) < 10.48)
-    # Change des_traj back to 0/1
-    # Change radius-center in circular_traj
-    # Change r/2 in trajectory
-        
+
     # ----------------------------- NAVIGATE ----------------------------------
     # Set desired trajectory to 1 for circular navigation
-    
     i = 0
     des_traj = 1
-    while (not rospy.is_shutdown()):
-        # arg#1 - radius ; arg#2 - V_tan ; arg#2 - ZPos
-        mpc_control(des_traj, np.array([1,1,1.5]))
+    while (i<N) & (not rospy.is_shutdown()):
+        # rad: 0.3 , omega: 4 , r_actual: 1.4
+        # rad: 0.2 , omega: 4 , r_actual: 0.95
+        # arg#1 - radius ; arg#2 - omega ; arg#2 - ZPos
+        mpc_control(des_traj, np.array([0.2,4,1.5]))
         thrust = TwistStamped()
         thrust.twist.linear.x = F[0]
         thrust.twist.linear.y = F[1]
@@ -160,19 +157,35 @@ def main():
         pub.publish(thrust)
         rate.sleep() 
     
-    # -------------------------- POWER OFF ------------------------------------    
-    # thrust = TwistStamped()
-    #while (np.linalg.norm(x[:,i] - np.array([0,0,0.53,0,0,0])) > 0.01) and (not rospy.is_shutdown()):
-    # thrust.twist.linear.x = 0
-    # thrust.twist.linear.y = 0
-    # thrust.twist.linear.z = 0
-    # thrust.twist.angular.x = 0.0
-    # thrust.twist.angular.y = 0.0
-    # thrust.twist.angular.z = 0.0 
-    # rospy.loginfo(thrust)
-    # pub.publish(thrust)
-    # rate.sleep() 
+    # -------------------------- LANDING -------------------------------------- 
+    des_traj = 0
+    while (x[5,i-1] > 0.15) & (not rospy.is_shutdown()):
+        # arg#1 - XPos ; arg#2 - YPos ; arg#2 - ZPos
+        mpc_control(des_traj, np.array([0,0,0.1]))
+        thrust = TwistStamped()
+        thrust.twist.linear.x = F[0]
+        thrust.twist.linear.y = F[1]
+        thrust.twist.linear.z = F[2] + 5.25
+        thrust.twist.angular.x = 0.0
+        thrust.twist.angular.y = 0.0
+        thrust.twist.angular.z = 0.0 
+        rospy.loginfo(thrust)
+        pub.publish(thrust)
+        rate.sleep() 
         
+    # -------------------------- POWER OFF ------------------------------------
+    sleep(0.05)
+    thrust = TwistStamped()
+    thrust.twist.linear.x = 0
+    thrust.twist.linear.y = 0
+    thrust.twist.linear.z = 0
+    thrust.twist.angular.x = 0.0
+    thrust.twist.angular.y = 0.0
+    thrust.twist.angular.z = 0.0 
+    rospy.loginfo(thrust)
+    pub.publish(thrust)
+    rate.sleep() 
+
 # =============================================================================
 # ============================    PID CONTROL     =============================
 # =============================================================================
@@ -240,6 +253,9 @@ def pd_control(time):
 # =============================================================================
 
 def plot_trajectories():
+    global x
+    # Remove first column used for stacking purposes
+    x = x[:,1:]
     
     # 2D X-Y plot
     fig = plt.figure(1, figsize=(18,6))
