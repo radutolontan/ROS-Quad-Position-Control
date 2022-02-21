@@ -4,6 +4,9 @@ import pdb
 import matplotlib.pyplot as plt
 import copy
 import pickle
+import time as tm
+
+end_time = []
 
 from CFTOC import CFTOC
 from LMPC import LMPC
@@ -41,20 +44,23 @@ class cost_matrices(object):
                                                   self.Q, self.R)
 
 def main():
+    
+    global end_time
+    
     # Define linear dynamics
     dynamics = point_mass_dynamics()
  
     # Define optimal control costs
     costs = cost_matrices(dynamics)
 
-    # Select desired reference trajectory (0 - circular)
-    traj = 0
+    # Select desired reference trajectory (0 - circular)(1 - setPoint)
+    traj = 1
     	
 	# Initial Condition
-    x0 = np.array([0,0,0,0,0,0])
+    x0 = np.array([0,0,0,0.68,0.05,0])
     
 	# Initialize MPC object
-    N_CFTOC = 20
+    N_CFTOC = 10
     CFTOC_MPC  = CFTOC(N_CFTOC, traj, dynamics, costs)
     
 	# =========================================================================
@@ -66,13 +72,17 @@ def main():
     ucl_feasible = []
     xt           = x0
     time_index   = 0
+    
 
-	# Run CFTOC
-    while True:
+
+	# Run MPC
+    while (time_index<500):
         xt = xcl_feasible[time_index] # Read system state
-
+        
+        start_time = tm.time()
         CFTOC_MPC.solve(xt, time_index, verbose = False) # Solve CFTOC
-
+        end_time.append(tm.time() - start_time)
+        
 		# Read input
         ut = CFTOC_MPC.uPred[:,0]
         ucl_feasible.append(ut)
@@ -82,31 +92,30 @@ def main():
         time_index += 1
         
         # Stop running when finish line is crossed from below
-        #if (xt[5]>0.45):
-        if (xt[1]>0) & (abs(xt[4]) <= 0.02) & (xt[3]>1):
+        #if (xt[5]>0.1):
+        if (xt[1]>0) & (abs(xt[4]) <= 0.02) & (xt[3]>0.2):
             break
             
+    print("AVG: ", np.mean(end_time))
+    print("MAX: ", np.max(end_time))
     x_array = np.array(xcl_feasible)
     #print(np.round(np.array(xcl_feasible).T, decimals=2))
     #print(np.round(np.array(ucl_feasible).T, decimals=2))
     
     print("MPC Terminated!")
-	# =================================================================================
 
-	# ====================================================================================
-	# Run LMPC
-	# ====================================================================================
-    
+	# =========================================================================
+	# =============================   Run LMPC   ==============================
+	# =========================================================================
+    """
 	# Initialize LMPC objects
-    N_LMPC = 3 # horizon length
+    N_LMPC = 10 # horizon length
     CFTOC_LMPC = CFTOC(N_LMPC, traj, dynamics, costs) # CFTOC solved by LMPC
     lmpc = LMPC(CFTOC_LMPC, CVX=True) # Initialize the LMPC (decide if you wanna use the CVX hull)
     lmpc.addTrajectory(xcl_feasible, ucl_feasible) # Add feasible trajectory to the safe set
 	
-    totalIterations = 20 # Number of iterations to perform
+    totalIterations = 3 # Number of iterations to perform
 
-	# run simulation
-	# iteration loop
     print("Starting LMPC")
     for it in range(0,totalIterations):
         #set initial condition at each iteration
@@ -131,7 +140,7 @@ def main():
 
 		# Add trajectory to update the safe set and value function
         lmpc.addTrajectory(xcl, ucl)
-
+    """
 	# =====================================================================================
     
 	# ====================================================================================
@@ -154,7 +163,7 @@ def main():
     #filename = 'lmpc_object.pkl'
     #filehandler = open(filename, 'wb')
     #pickle.dump(lmpc, filehandler)
-    plt.plot(x_array[:,3], x_array[:,4],'green')
+    #plt.plot(x_array[:,3], x_array[:,4],'green')
     #plt.plot(xOpt[:,3], xOpt[:,4],'magenta')
     plot_trajectories(x_array)
 

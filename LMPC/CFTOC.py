@@ -1,6 +1,7 @@
 import numpy as np
 import pdb 
 import scipy
+import time as tm
 from cvxpy import Variable, quad_form, norm, Problem, Minimize, MOSEK
 
 from trajectories import circular_traj, set_point
@@ -53,15 +54,15 @@ class CFTOC(object):
         # CIRCULAR TRAJECTORY
         if (self.trajectory_type == 0):
             frequency = self.freq
-            radius = 1.5 # (m)
-            omega = 0.4 # (rad/s)
-            height = 0.75 # (m)
+            radius = 0.7 # (m)
+            omega = 1.2 # (rad/s)
+            height = 0 # (m)
             ref = circular_traj(time_steps, frequency, radius, omega, height)
         
         # SETPOINT
         elif (self.trajectory_type == 1):
             frequency = self.freq
-            setpoint = np.array ([0,0,0.5]) # (m,m,m)
+            setpoint = np.array ([0.1,0.1,0.1]) # (m,m,m)
             ref = set_point(time_steps, frequency, setpoint)
                 
         return ref
@@ -74,6 +75,7 @@ class CFTOC(object):
 			- SS: (optional) contains a set of state and the terminal constraint is ConvHull(SS)
 			- Qfun: (optional) cost associtated with the state stored in SS. Terminal cost is BarycentrcInterpolation(SS, Qfun)
 		""" 
+        start_time = tm.time()
     	# =====================================================================
         # =======================  DECISION VARIABLES  ========================
         # =====================================================================
@@ -86,7 +88,10 @@ class CFTOC(object):
                 lambVar = Variable((SS.shape[1], 1), boolean=False) # Initialize vector of variables
             else:
                 lambVar = Variable((SS.shape[1], 1), boolean=True) # Initialize vector of variables
-
+        
+        end_time = tm.time() - start_time
+        print("Var Initialization: ", end_time)
+        start_time = tm.time()
     	# =====================================================================
         # ===========================  CONSTRAINTS  ===========================
         # =====================================================================
@@ -108,7 +113,10 @@ class CFTOC(object):
             constr += [SS * lambVar[:,0] == x[:,self.N], # Terminal state \in ConvHull(SS)
 						np.ones((1, SS.shape[1])) * lambVar[:,0] == 1, # Multiplies \lambda sum to 1
 						lambVar >= 0] # Multiplier are positive definite
-        
+        # I am gay
+        end_time = tm.time() - start_time
+        print("Constraints: ", end_time)
+        start_time = tm.time()
         # =====================================================================
         # ==============================  COST  ===============================
         # =====================================================================
@@ -129,6 +137,9 @@ class CFTOC(object):
         else:
             cost += quad_form(x[:,self.N] - preview[:,self.N-1], self.Qf) # For MPC
 
+        end_time = tm.time() - start_time
+        print("Costs: ", end_time)
+        start_time = tm.time()
         # =====================================================================
         # =============================  SOLVER  ==============================
         # =====================================================================
@@ -140,7 +151,9 @@ class CFTOC(object):
         else:
             problem.solve(verbose=verbose, solver=MOSEK)
 
-
+        end_time = tm.time() - start_time
+        print("SolVeR: ", end_time)
+        
 		# Store the open-loop predicted trajectory
         self.xPred = x.value
         self.uPred = u.value	
