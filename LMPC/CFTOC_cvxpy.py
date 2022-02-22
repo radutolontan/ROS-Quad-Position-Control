@@ -2,7 +2,7 @@ import numpy as np
 import pdb 
 import scipy
 import time as tm
-from cvxpy import Variable, quad_form, norm, Problem, Minimize, MOSEK
+from cvxpy import Variable, quad_form, norm, Problem, Minimize, MOSEK, ECOS
 
 from trajectories import circular_traj, set_point
 
@@ -55,8 +55,8 @@ class CFTOC(object):
         if (self.trajectory_type == 0):
             frequency = self.freq
             radius = 0.7 # (m)
-            omega = 1.2 # (rad/s)
-            height = 0 # (m)
+            omega = 0.3 # (rad/s)
+            height = 0.8 # (m)
             ref = circular_traj(time_steps, frequency, radius, omega, height)
         
         # SETPOINT
@@ -90,7 +90,7 @@ class CFTOC(object):
                 lambVar = Variable((SS.shape[1], 1), boolean=True) # Initialize vector of variables
         
         end_time = tm.time() - start_time
-        print("Var Initialization: ", end_time)
+        #print("Var Initialization: ", end_time)
         start_time = tm.time()
     	# =====================================================================
         # ===========================  CONSTRAINTS  ===========================
@@ -115,7 +115,7 @@ class CFTOC(object):
 						lambVar >= 0] # Multiplier are positive definite
         # I am gay
         end_time = tm.time() - start_time
-        print("Constraints: ", end_time)
+        #print("Constraints: ", end_time)
         start_time = tm.time()
         # =====================================================================
         # ==============================  COST  ===============================
@@ -138,7 +138,7 @@ class CFTOC(object):
             cost += quad_form(x[:,self.N] - preview[:,self.N-1], self.Qf) # For MPC
 
         end_time = tm.time() - start_time
-        print("Costs: ", end_time)
+        #print("Costs: ", end_time)
         start_time = tm.time()
         # =====================================================================
         # =============================  SOLVER  ==============================
@@ -147,16 +147,16 @@ class CFTOC(object):
 		# Solve the Finite Time Optimal Control Problem
         problem = Problem(Minimize(cost), constr)
         if CVX == True:
-            problem.solve(verbose=verbose, solver=MOSEK) # I find that ECOS is better please use it when solving QPs
+            problem.solve(verbose=verbose, solver=ECOS) # I find that ECOS is better please use it when solving QPs
         else:
-            problem.solve(verbose=verbose, solver=MOSEK)
+            problem.solve(verbose=verbose, solver=ECOS)
 
         end_time = tm.time() - start_time
-        print("SolVeR: ", end_time)
+        #print("SolVeR: ", end_time)
         
 		# Store the open-loop predicted trajectory
-        self.xPred = x.value
-        self.uPred = u.value	
+        self.x_pred = x.value
+        self.u_pred = u.value	
         if SS is not None:
             self.lamb  = lambVar.value
 

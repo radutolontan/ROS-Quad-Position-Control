@@ -53,7 +53,7 @@ class LMPC(object):
 		# Finally flip the cost to have correct order
 		return np.flip(cost).tolist()
 
-	def solve(self, xt, verbose = False):
+	def solve(self, xt, ut, time_index, verbose = False):
 
 		# Build SS and cost matrices used in the cftoc 
 		# NOTE: it is possible to use a subset of the stored data to reduce computational complexity while having all guarantees on safety and performance improvement
@@ -61,7 +61,7 @@ class LMPC(object):
 		Qfun_vector = np.expand_dims(np.array(list(itertools.chain.from_iterable(self.Qfun))), 0) # From a 2D list to a 1D array
 			
 		# Solve the CFTOC. 
-		self.cftoc.solve(xt, verbose, SS_vector, Qfun_vector, self.CVX)
+		self.cftoc.solve(xt, ut, time_index, verbose, SS_vector, Qfun_vector, self.CVX)
 
 
 		# Update predicted trajectory

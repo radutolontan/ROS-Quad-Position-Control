@@ -8,7 +8,7 @@ import time as tm
 
 end_time = []
 
-from CFTOC import CFTOC
+from CFTOC_casadi import CFTOC
 from LMPC import LMPC
 
 class point_mass_dynamics:
@@ -38,10 +38,12 @@ class cost_matrices(object):
         # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref) (stage or running cost matrix on states)
         self.Q = np.diag([3., 3., 6., 4., 4., 8.])
         # Jinput = (u_k).T * R * (u_k) (stage cost on inputs)
-        self.R = 2 * np.diag(np.array([1,1,0.01]))
+        self.R = 2 * np.diag(np.array([1,1,0.0002]))
         # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref) (terminal cost on states)
         self.Qf = scipy.linalg.solve_discrete_are(dynamics.A_k, dynamics.B_k, 
                                                   self.Q, self.R)
+        # Jdinput = (u_k+1 - u_k).T * dR * (u_k+1 - u_k) (stage cost on input change)
+        self.dR = 0.2 * np.diag(np.array([16,16,2]))
 
 def main():
     
@@ -54,13 +56,16 @@ def main():
     costs = cost_matrices(dynamics)
 
     # Select desired reference trajectory (0 - circular)(1 - setPoint)
-    traj = 1
+    traj = 0
     	
 	# Initial Condition
-    x0 = np.array([0,0,0,0.68,0.05,0])
+    x0 = np.array([0,0,0,0.68,0.03,0.8])
+    
+    # Initial conditions on inputs are set to allow smooth input changes
+    u0 = np.array([0,0,dynamics.m*dynamics.g]).T
     
 	# Initialize MPC object
-    N_CFTOC = 10
+    N_CFTOC = 7
     CFTOC_MPC  = CFTOC(N_CFTOC, traj, dynamics, costs)
     
 	# =========================================================================
@@ -71,43 +76,41 @@ def main():
     xcl_feasible = [x0]
     ucl_feasible = []
     xt           = x0
+    ut           = u0
     time_index   = 0
     
-
-
-	# Run MPC
-    while (time_index<500):
+	# Solve CTOFC for MPC
+    while True:
         xt = xcl_feasible[time_index] # Read system state
         
         start_time = tm.time()
-        CFTOC_MPC.solve(xt, time_index, verbose = False) # Solve CFTOC
+        CFTOC_MPC.solve(xt, ut, time_index, verbose = False) # Solve CFTOC
         end_time.append(tm.time() - start_time)
         
 		# Read input
-        ut = CFTOC_MPC.uPred[:,0]
+        ut = CFTOC_MPC.u_pred[:,0]
         ucl_feasible.append(ut)
         
         # Run system dynamics
         xcl_feasible.append(CFTOC_MPC.model(xcl_feasible[time_index], ut))
         time_index += 1
         
+        # print("CFTOC #", time_index-1)
+        
         # Stop running when finish line is crossed from below
-        #if (xt[5]>0.1):
-        if (xt[1]>0) & (abs(xt[4]) <= 0.02) & (xt[3]>0.2):
+        if (xt[1]>0) & (abs(xt[4]) <= 0.028):
             break
             
     print("AVG: ", np.mean(end_time))
     print("MAX: ", np.max(end_time))
     x_array = np.array(xcl_feasible)
-    #print(np.round(np.array(xcl_feasible).T, decimals=2))
-    #print(np.round(np.array(ucl_feasible).T, decimals=2))
     
     print("MPC Terminated!")
 
 	# =========================================================================
 	# =============================   Run LMPC   ==============================
 	# =========================================================================
-    """
+    
 	# Initialize LMPC objects
     N_LMPC = 10 # horizon length
     CFTOC_LMPC = CFTOC(N_LMPC, traj, dynamics, costs) # CFTOC solved by LMPC
@@ -116,31 +119,40 @@ def main():
 	
     totalIterations = 3 # Number of iterations to perform
 
-    print("Starting LMPC")
-    for it in range(0,totalIterations):
-        #set initial condition at each iteration
+    print("Starting LMPC...")
+    
+    # Run LMPC
+    for it in range (0,totalIterations):
+        # Reset initial conditions and storage at each iteration
         xcl = [x0] 
         ucl =[]
-        time = 0
-		# time Loop (Perform the task until close to the origin)
-        while np.dot(xcl[time], xcl[time]) > 10**(-10):
-			
+        ut = u0
+        time_index = 0
+        
+		# Solve CFTOC for LMPC
+        while True:
 			# Read measurement
-            xt = xcl[time] 
+            xt = xcl[time_index] 
 
-			# Solve FTOCP
-            lmpc.solve(xt, verbose = False) 
+			# Solve CFTOC
+            lmpc.solve(xt, ut, time_index, verbose = False) 
 			# Read optimal input
             ut = lmpc.uPred[:,0][0]
 
 			# Apply optimal input to the system
             ucl.append(ut)
-            xcl.append(lmpc.ftocp.model(xcl[time], ut))
-            time += 1
+            xcl.append(lmpc.CFTOC_LMPC.model(xcl[time_index], ut))
+            time_index += 1
+
+            # Quit when finish line is reached
+            if (xt[1]>0) & (abs(xt[4]) <= 0.028):
+                break
+
+        print("LMPC Lap #", it+1 , " complete!")
 
 		# Add trajectory to update the safe set and value function
         lmpc.addTrajectory(xcl, ucl)
-    """
+    
 	# =====================================================================================
     
 	# ====================================================================================
@@ -166,6 +178,7 @@ def main():
     #plt.plot(x_array[:,3], x_array[:,4],'green')
     #plt.plot(xOpt[:,3], xOpt[:,4],'magenta')
     plot_trajectories(x_array)
+    plt.plot(np.array(xcl_feasible)[2,:])
 
 
 def plot_trajectories(x):
