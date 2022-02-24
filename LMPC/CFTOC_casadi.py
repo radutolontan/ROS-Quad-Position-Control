@@ -152,7 +152,7 @@ class CFTOC(object):
          
         if SS is not None:
             # (LMPC Only) Value Function
-            costTerminal += csd.mtimes(Qfun[0,:].T, lambVar)
+            costTerminal += csd.mtimes(Qfun, lambVar.T)
         else:
             # State Final (Terminal) Cost
             # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref)

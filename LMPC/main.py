@@ -95,7 +95,7 @@ def main():
         xcl_feasible.append(CFTOC_MPC.model(xcl_feasible[time_index], ut))
         time_index += 1
         
-        # print("CFTOC #", time_index-1)
+        print("CFTOC #", time_index-1)
         
         # Stop running when finish line is crossed from below
         if (xt[1]>0) & (abs(xt[4]) <= 0.028):
