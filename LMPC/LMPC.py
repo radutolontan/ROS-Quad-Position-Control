@@ -58,8 +58,8 @@ class LMPC(object):
 		# Build SS and cost matrices used in the cftoc 
 		# NOTE: it is possible to use a subset of the stored data to reduce computational complexity while having all guarantees on safety and performance improvement
 		SS_vector = np.squeeze(list(itertools.chain.from_iterable(self.SS))).T # From a 3D list to a 2D array
-		#Qfun_vector = np.expand_dims(np.array(list(itertools.chain.from_iterable(self.Qfun))), 0) # From a 2D list to a 1D array
-		Qfun_vector = np.array(list(itertools.chain.from_iterable(self.Qfun))) # From a 2D list to a 1D array
+		Qfun_vector = np.expand_dims(np.array(list(itertools.chain.from_iterable(self.Qfun))), 0) # From a 2D list to a 1D array
+		#Qfun_vector = np.array(list(itertools.chain.from_iterable(self.Qfun))) # From a 2D list to a 1D array
 
 			
 		# Solve the CFTOC. 
@@ -67,5 +67,5 @@ class LMPC(object):
 
 
 		# Update predicted trajectory
-		self.xPred= self.cftoc.xPred
-		self.uPred= self.cftoc.uPred
+		self.xPred= self.cftoc.x_pred
+		self.uPred= self.cftoc.u_pred

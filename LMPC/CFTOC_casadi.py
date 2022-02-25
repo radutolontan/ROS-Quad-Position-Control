@@ -56,7 +56,7 @@ class CFTOC(object):
         if (self.trajectory_type == 0):
             frequency = self.freq
             radius = 0.7 # (m)
-            omega = 0.9 # (rad/s)
+            omega = 1.2 # (rad/s)
             height = 0.8 # (m)
             ref = circular_traj(time_steps, frequency, radius, omega, height)
         
@@ -152,7 +152,7 @@ class CFTOC(object):
          
         if SS is not None:
             # (LMPC Only) Value Function
-            costTerminal += csd.mtimes(Qfun, lambVar.T)
+            costTerminal += csd.mtimes(Qfun, lambVar)
         else:
             # State Final (Terminal) Cost
             # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref)

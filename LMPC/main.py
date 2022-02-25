@@ -105,6 +105,9 @@ def main():
     print("MAX: ", np.max(end_time))
     x_array = np.array(xcl_feasible)
     
+    # Store iteration time
+    completion_time = [time_index]
+    
     print("MPC Terminated!")
 
 	# =========================================================================
@@ -112,7 +115,7 @@ def main():
 	# =========================================================================
     
 	# Initialize LMPC objects
-    N_LMPC = 10 # horizon length
+    N_LMPC = 4 # horizon length
     CFTOC_LMPC = CFTOC(N_LMPC, traj, dynamics, costs) # CFTOC solved by LMPC
     lmpc = LMPC(CFTOC_LMPC, CVX=True) # Initialize the LMPC (decide if you wanna use the CVX hull)
     lmpc.addTrajectory(xcl_feasible, ucl_feasible) # Add feasible trajectory to the safe set
@@ -137,12 +140,14 @@ def main():
 			# Solve CFTOC
             lmpc.solve(xt, ut, time_index, verbose = False) 
 			# Read optimal input
-            ut = lmpc.uPred[:,0][0]
+            ut = lmpc.uPred[:,0]
 
 			# Apply optimal input to the system
             ucl.append(ut)
-            xcl.append(lmpc.CFTOC_LMPC.model(xcl[time_index], ut))
+            xcl.append(lmpc.cftoc.model(xcl[time_index], ut))
             time_index += 1
+
+            print("LMPC ",it+1,"|",time_index-1)
 
             # Quit when finish line is reached
             if (xt[1]>0) & (abs(xt[4]) <= 0.028):
@@ -152,6 +157,15 @@ def main():
 
 		# Add trajectory to update the safe set and value function
         lmpc.addTrajectory(xcl, ucl)
+        
+        
+        # FOR PLOTTING AND TROUBLESHOOITNG
+        x_LMPC = np.array(xcl)
+        plot_trajectories(x_LMPC)
+        
+        # Store completion time
+        completion_time.append(time_index)
+
     
 	# =====================================================================================
     
@@ -178,9 +192,10 @@ def main():
     #plt.plot(x_array[:,3], x_array[:,4],'green')
     #plt.plot(xOpt[:,3], xOpt[:,4],'magenta')
     plot_trajectories(x_array)
-    plt.plot(np.array(xcl_feasible)[2,:])
+    
+    print("Completion times: ", completion_time)
 
-
+    
 def plot_trajectories(x):
     
     # 2D X-Y plot
