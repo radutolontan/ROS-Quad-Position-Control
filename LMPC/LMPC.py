@@ -1,71 +1,108 @@
 
 import numpy as np
 from numpy import linalg as la
+from numpy.linalg import norm
 import pdb
 import copy
 import itertools
 
 class LMPC(object):
-	"""Learning Model Predictive Controller (LMPC)
-	Inputs:
-		- cftoc: Constrained Finite Time Optimal Control Prolem object used to compute the predicted trajectory
-	Methods:
-		- addTrajectory: adds a trajectory to the safe set SS and update value function
-		- computeCost: computes the cost associated with a feasible trajectory
-		- solve: uses cftoc and the stored data to comptute the predicted trajectory"""
-	def __init__(self, cftoc, CVX):
-		# Initialization
-		self.cftoc = cftoc
-		self.SS    = []
-		self.uSS   = []
-		self.Qfun  = []
-		self.Q = cftoc.Q
-		self.R = cftoc.R
-		self.it    = 0
-		self.CVX = CVX
 
-	def addTrajectory(self, x, u):
+    def __init__(self, cftoc, N_LMPC, CVX):
+		# Initialization
+        self.cftoc = cftoc
+        self.SS    = []
+        self.uSS   = []
+        self.Qfun  = []
+        self.N_LMPC = N_LMPC
+        self.Q = cftoc.Q
+        self.R = cftoc.R
+        self.dR = cftoc.dR
+        self.it    = 0
+        self.CVX = CVX
+
+    def addTrajectory(self, x, u):
 		# Add the feasible trajectory x and the associated input sequence u to the safe set
-		self.SS.append(copy.copy(x))
-		self.uSS.append(copy.copy(u))
+        self.SS.append(copy.copy(x))
+        self.uSS.append(copy.copy(u))
 
 		# Compute and store the cost associated with the feasible trajectory
-		cost = self.computeCost(x, u)
-		self.Qfun.append(cost)
+        cost = self.computeCost(x, u)
+        self.Qfun.append(cost)
 
 		# Initialize zVector
-		self.zt = np.array(x[self.cftoc.N])
+        self.zt = np.array(x[self.cftoc.N])
 
 		# Augment iteration counter and print the cost of the trajectories stored in the safe set
-		self.it = self.it + 1
-		print("Trajectory added to the Safe Set. Current Iteration: ", self.it)
-		print("Performance stored trajectories: \n", [self.Qfun[i][0] for i in range(0, self.it)])
+        self.it = self.it + 1
+        print("Trajectory added to the Safe Set. Current Iteration: ", self.it)
+        print("Performance stored trajectories: \n", [self.Qfun[i][0] for i in range(0, self.it)])
 
-	def computeCost(self, x, u):
+    def computeCost(self, x, u):
 		# Compute the cost in a DP like strategy: start from the last point x[len(x)-1] and move backwards
-		for i in range(0,len(x)):
-			idx = len(x)-1 - i
-			if i == 0:
-				cost = [np.dot(np.dot(x[idx],self.Q),x[idx])]
-			else:
-				cost.append(np.dot(np.dot(x[idx],self.Q),x[idx]) + np.dot(np.dot(u[idx],self.R),u[idx]) + cost[-1])
+        for i in range(0,len(x)):
+            idx = len(x)-1 - i
+            if i == 0:
+                cost = [np.dot(np.dot(x[idx],self.Q),x[idx])]
+            else:
+                cost.append(np.dot(np.dot(x[idx],self.Q),x[idx]) + np.dot(np.dot(u[idx],self.R),u[idx]) + cost[-1])
 		
 		# Finally flip the cost to have correct order
-		return np.flip(cost).tolist()
+        return np.flip(cost).tolist()
 
-	def solve(self, xt, ut, time_index, verbose = False):
+    def subset_SS(self, SS_full, Qfun_full, xt, n_points):
+        """
+        Return subset of safe set and corresponding value function closest to 
+        current state
+
+        Parameters
+        ----------
+        SS_full : full safe set array
+        Qfun_full : full value function array
+        xt : current state
+        n_points : number of instances returned
+        
+        Returns
+        -------
+        SS_subset : subset of safe set closest to xt
+
+        """
+        err_2_norm = []
+        n = SS_full.shape[1]
+        
+        # Compute 2-norm of error for each entry of safeset
+        for i in range(n):
+            col = SS_full[:,i]
+            err_2_norm.append(abs(la.norm(col - xt)))
+            
+        # Sort first n_points elements of err_2_norm
+        res = sorted(range(len(err_2_norm)), key = lambda sub: err_2_norm[sub])[:n_points]
+        
+        # Append first n_points elements of SS and Qfun to subset entities
+        SS_subset = np.array([SS_full[:,res[0]]]).T
+        Qfun_subset = np.array([Qfun_full[res[0]]])
+        for i in range(1,len(res)):
+            SS_subset = np.concatenate((SS_subset, np.array([SS_full[:,res[i]]]).T), axis=1)
+            Qfun_subset = np.concatenate((Qfun_subset, np.array([Qfun_full[res[i]]])), axis=0)
+         
+        # Put Qfun_subset into appropriate shape
+        Qfun_subset = np.reshape(Qfun_subset, (1,n_points))
+        
+        return SS_subset, Qfun_subset
+        
+    def solve(self, xt, ut, time_index, verbose = False):
 
 		# Build SS and cost matrices used in the cftoc 
 		# NOTE: it is possible to use a subset of the stored data to reduce computational complexity while having all guarantees on safety and performance improvement
-		SS_vector = np.squeeze(list(itertools.chain.from_iterable(self.SS))).T # From a 3D list to a 2D array
-		Qfun_vector = np.expand_dims(np.array(list(itertools.chain.from_iterable(self.Qfun))), 0) # From a 2D list to a 1D array
-		#Qfun_vector = np.array(list(itertools.chain.from_iterable(self.Qfun))) # From a 2D list to a 1D array
-
+        SS_vector = np.squeeze(list(itertools.chain.from_iterable(self.SS))).T # From a 3D list to a 2D array
+        Qfun_vector = np.expand_dims(np.array(list(itertools.chain.from_iterable(self.Qfun))), 0) # From a 2D list to a 1D array
 			
+        # Build subset of safeset used for LMPC CFTOC problem
+        SS_selected, Qfun_selected = self.subset_SS(SS_vector, Qfun_vector[0], xt, 40*self.N_LMPC)
+        
 		# Solve the CFTOC. 
-		self.cftoc.solve(xt, ut, time_index, verbose, SS_vector, Qfun_vector, self.CVX)
-
+        self.cftoc.solve(xt, ut, time_index, verbose, SS_selected, Qfun_selected, self.CVX)
 
 		# Update predicted trajectory
-		self.xPred= self.cftoc.x_pred
-		self.uPred= self.cftoc.u_pred
+        self.xPred= self.cftoc.x_pred
+        self.uPred= self.cftoc.u_pred
