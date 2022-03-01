@@ -2,7 +2,6 @@ This repository was created at UC Berkeley for the "Self-Training Quadcopter Con
 
 ## Dependencies
 - [qrotor_firmware](https://github.com/HybridRobotics/qrotor_firmware): created by the Hybrid Robotics research group (PRIVATE) 
-- [CasADi](https://web.casadi.org/): optimization interpreter
-- [CVXPY](https://www.cvxpy.org/): optimization interpreter
+- [PYOMO](http://www.pyomo.org/): optimization interpreter
 - [MOSEK](https://www.mosek.com/): optimization QP solver
 
