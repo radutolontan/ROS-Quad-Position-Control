@@ -48,13 +48,13 @@ class CFTOC(object):
         self.freq = dynamics.freq
         self.N = N
         
-    def get_reftraj(self, time):
+    def get_reftraj(self, time, horizon):
         """This method returns the reference trajectory preview for N timesteps given:
 			- time: the current time index
             - type_traj: 0 for circular trajectory
 		""" 
         # Define next N time steps from current time index
-        time_steps = np.linspace(time, time+self.N, self.N+1) 
+        time_steps = np.linspace(time, time+horizon, horizon+1) 
         
         # CIRCULAR TRAJECTORY
         if (self.trajectory_type == 0):
@@ -105,7 +105,7 @@ class CFTOC(object):
         model.dR = self.dR
         
         # Generate Trajectory Preview
-        preview = self.get_reftraj(time_index)
+        preview = self.get_reftraj(time_index, self.N)
         
     	# =====================================================================
         # =======================  DECISION VARIABLES  ========================

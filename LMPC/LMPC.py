@@ -39,13 +39,20 @@ class LMPC(object):
         print("Performance stored trajectories: \n", [self.Qfun[i][0] for i in range(0, self.it)])
 
     def computeCost(self, x, u):
+        # Import reference trajectory and compute error
+        ref_traj = self.cftoc.get_reftraj(0, len(x)-1)
+        err = np.array(x) - ref_traj.T
+        
 		# Compute the cost in a DP like strategy: start from the last point x[len(x)-1] and move backwards
         for i in range(0,len(x)):
             idx = len(x)-1 - i
             if i == 0:
-                cost = [np.dot(np.dot(x[idx],self.Q),x[idx])]
+                cost = [np.dot(np.dot(err[idx],self.Q),err[idx])]
             else:
-                cost.append(np.dot(np.dot(x[idx],self.Q),x[idx]) + np.dot(np.dot(u[idx],self.R),u[idx]) + cost[-1])
+                cost.append(np.dot(np.dot(err[idx],self.Q),err[idx]) + # Cost on states
+                            np.dot(np.dot(u[idx],self.R),u[idx]) + # Cost on inputs
+                            np.dot(np.dot(u[idx]-u[idx-1],self.dR),u[idx]-u[idx-1]) + # Cost on rate of change on states
+                            cost[-1]) # Previous cost
 		
 		# Finally flip the cost to have correct order
         return np.flip(cost).tolist()
@@ -92,8 +99,7 @@ class LMPC(object):
         
     def solve(self, xt, ut, time_index, verbose = False):
 
-		# Build SS and cost matrices used in the cftoc 
-		# NOTE: it is possible to use a subset of the stored data to reduce computational complexity while having all guarantees on safety and performance improvement
+		# Build SS and cost matrices used in the cftoc problem
         SS_vector = np.squeeze(list(itertools.chain.from_iterable(self.SS))).T # From a 3D list to a 2D array
         Qfun_vector = np.expand_dims(np.array(list(itertools.chain.from_iterable(self.Qfun))), 0) # From a 2D list to a 1D array
 			
