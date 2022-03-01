@@ -8,7 +8,7 @@ import time as tm
 
 end_time = []
 
-from CFTOC_casadi import CFTOC
+from CFTOC_pyomo import CFTOC
 from LMPC import LMPC
 
 class point_mass_dynamics:
@@ -104,6 +104,8 @@ def main():
     print("AVG: ", np.mean(end_time))
     print("MAX: ", np.max(end_time))
     x_array = np.array(xcl_feasible)
+    plot_trajectories(x_array)
+
     
     # Store iteration time
     completion_time = [time_index]

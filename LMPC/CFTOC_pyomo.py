@@ -1,0 +1,244 @@
+import numpy as np
+import pdb 
+import scipy
+import time as tm
+import pyomo.environ as pyo
+from pyomo.opt import SolverStatus, TerminationCondition
+import mosek
+from trajectories import circular_traj, set_point
+
+
+class CFTOC(object):
+    """ Constrained Finite Time Optimal Control (CFTOC)
+	Methods:
+		- solve: solves the CFTOC problem given the initial condition x0, terminal contraints (optinal) and terminal cost (optional)
+		- model: given x_t and u_t computes x_{t+1} = Ax_t + Bu_t
+	"""
+    def __init__(self, N, trajectory_type, dynamics, costs):
+		# System constraints
+        self.F_min = [-10,-10, 0]
+        self.F_max = [ 10, 10,20]
+        
+		# System Dynamics 
+        self.A = dynamics.A
+        self.B = dynamics.B 
+        self.C = dynamics.C
+        self.A_k = dynamics.A_k
+        self.B_k = dynamics.B_k
+        self.C_k = dynamics.C_k
+        self.n = self.A.shape[1]
+        self.d = self.B.shape[1]
+
+		# Stage Cost (h(x,u) = (x-x_ref)^TQ(x-x_ref) +u^TRu +(u_{k+1}-u_k)^tdR(u_{k+1}-u_k))
+        self.Q = costs.Q
+        self.R = costs.R
+        self.dR = costs.dR
+        
+        # Terminal Cost (MPC only)
+        self.Qf = costs.Qf
+        
+		# Initialize Predicted Trajectory
+        self.xPred = []
+        self.uPred = []
+        
+        # Selected trajectory 
+        self.trajectory_type = trajectory_type
+        
+        # Selected running frequency and horizon
+        self.freq = dynamics.freq
+        self.N = N
+        
+    def get_reftraj(self, time):
+        """This method returns the reference trajectory preview for N timesteps given:
+			- time: the current time index
+            - type_traj: 0 for circular trajectory
+		""" 
+        # Define next N time steps from current time index
+        time_steps = np.linspace(time, time+self.N, self.N+1) 
+        
+        # CIRCULAR TRAJECTORY
+        if (self.trajectory_type == 0):
+            frequency = self.freq
+            radius = 0.7 # (m)
+            omega = 1.2 # (rad/s)
+            height = 0.8 # (m)
+            ref = circular_traj(time_steps, frequency, radius, omega, height)
+        
+        # SETPOINT
+        elif (self.trajectory_type == 1):
+            frequency = self.freq
+            setpoint = np.array ([0.1,0.1,0.1]) # (m,m,m)
+            ref = set_point(time_steps, frequency, setpoint)
+                
+        return ref
+        
+        
+    def solve(self, x0, u0, time_index, verbose = False, SS = None, Qfun = None, CVX = None):
+        """This method solves an CFTOC problem given:
+			- x0: initial state condition
+            - u0: previously applied input
+            - time_index: current time index, used to create reference trajectory preview
+			- SS: (optional) contains a set of state and the terminal constraint is ConvHull(SS)
+			- Qfun: (optional) cost associtated with the state stored in SS. Terminal cost is BarycentrcInterpolation(SS, Qfun)
+		""" 
+        # Initialize optimization problem
+        model = pyo.ConcreteModel()
+        model.N = self.N
+        model.TS = 1/self.freq
+        model.nx = np.size(self.A, 0)
+        model.nu = np.size(self.B, 1)
+        
+        # Length of finite optimization problem
+        model.tIDX = pyo.Set( initialize= range(model.N+1), ordered=True )  
+        model.xIDX = pyo.Set( initialize= range(model.nx), ordered=True )
+        model.uIDX = pyo.Set( initialize= range(model.nu), ordered=True )
+  
+        # Create pyomo objects for the linear system description
+        model.A = self.A
+        model.B = self.B
+        model.C = self.C
+        
+        # Create pyomo objects for the cost matrices
+        model.Q = self.Q
+        model.Qf = self.Qf
+        model.R = self.R
+        model.dR = self.dR
+        
+        # Generate Trajectory Preview
+        preview = self.get_reftraj(time_index)
+        
+    	# =====================================================================
+        # =======================  DECISION VARIABLES  ========================
+        # =====================================================================
+        model.x = pyo.Var(model.xIDX, model.tIDX)
+        model.u = pyo.Var(model.uIDX, model.tIDX)
+        
+		# (LMPC ONLY) initialize lambda
+        if SS is not None:
+            model.SS = SS
+            model.Qfun = Qfun
+            # Capture number of entries in SS
+            model.SS_size = SS.shape[1]
+            model.lIDX = pyo.Set( initialize= range(model.SS_size), ordered=True )  
+            model.lambVar = pyo.Var(model.lIDX)
+            
+    	# =====================================================================
+        # ===========================  CONSTRAINTS  ===========================
+        # =====================================================================
+
+		# Initial Condition Constraints
+        model.initial_conditions = pyo.Constraint(model.xIDX, 
+                                                  rule=lambda model,i: model.x[i,0]==x0[i])
+            
+        # System Dynamics Constraints
+        def LTI_system(model, i, t):
+            return  model.x[i, t+1] - (model.x [i, t] + model.TS * (sum(model.A[i, j] * model.x[j, t] for j in model.xIDX) 
+                                                         + sum(model.B[i, j] * model.u[j, t] for j in model.uIDX) + model.C[i])) == 0 if t < model.N else pyo.Constraint.Skip
+        model.system_constraints = pyo.Constraint(model.xIDX, model.tIDX, rule=LTI_system)
+ 
+
+        # Input Constraints
+        model.input_constraints1 = pyo.Constraint(model.uIDX, model.tIDX, 
+                                                  rule=lambda model,i,t: model.u[i,t]<=self.F_max[i])
+        model.input_constraints2 = pyo.Constraint(model.uIDX, model.tIDX, 
+                                                  rule=lambda model,i,t: model.u[i,t]>=self.F_min[i])
+        
+        # (LMPC ONLY) initialize safe set constraints
+        if SS is not None:
+            # Positive lambda
+            model.lambVar_positive = pyo.Constraint(model.lIDX, 
+                                                    rule=lambda model,i: model.lambVar[i]>=0)
+            
+            # Sum lambda to 1
+            model.lambVar_sum = pyo.Constraint(expr=sum(model.lambVar[i] for i in model.lIDX) == 1 )
+
+            # Final state in safe set            
+            def enforce_SS(model, i):
+                return sum(model.SS[i,j] * model.lambVar[j] for j in model.lIDX) == model.x[i, model.N-1]
+              
+            model.lambVar_inSS = pyo.Constraint(model.xIDX, rule=enforce_SS)     
+                
+        # =====================================================================
+        # ==============================  COST  ===============================
+        # =====================================================================
+        
+        def objective(model):
+            # Initialize costs with zero
+            costX = 0.0
+            costU = 0.0
+            costdU = 0.0
+            costTerminal = 0.0
+            
+            for t in model.tIDX:
+                # STAGE COST ON STATES
+                # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref)
+                for i in model.xIDX:
+                    for j in model.xIDX:
+                        if t < model.N-1:
+                            costX += (model.x[i, t] - preview[i,t]) * model.Q[i, j] * (model.x[j, t] - preview[j,t])
+                
+                for i in model.uIDX:
+                    for j in model.uIDX:
+                        if t < model.N:
+                            # STAGE COST ON INPUTS
+                            # Jinput = (u_k).T * R * (u_k) (stage cost on inputs)
+                            costU += model.u[i, t] * model.R[i, j] * model.u[j, t]
+                            
+                    # STAGE COST ON RATE OF INPUT CHANGE
+                    # Jdinput = (u_{k+1} - u_k).T * dR * (u_{k+1} - u_k)
+                    if t < model.N-1:
+                        costdU += model.dR[i,i] * (model.u[i, t+1] - model.u[i, t])**2   
+                    
+            # Update stage cost on rate of input change to incorporate first input      
+            for i in model.uIDX:
+                costdU += model.dR[i,i] * (model.u[i, 0] - u0[i])**2  
+        
+            if SS is not None:
+                # (LMPC Only) Value Function
+                for l in model.lIDX:
+                    costTerminal += model.lambVar[l] * model.Qfun[0][l]
+
+            else:
+                # TERMINAL COST ON STATES
+                # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref)
+                for i in model.xIDX:
+                    for j in model.xIDX:
+                        costTerminal += (model.x[i, model.N-1] - preview[i,model.N-1]) * model.Qf[i, j] * (model.x[j, model.N-1] - preview[j,model.N-1])
+                
+            return costX + costU + costdU + costTerminal
+        
+        model.cost = pyo.Objective(rule = objective, sense = pyo.minimize)
+    
+        # =====================================================================
+        # =============================  SOLVER  ==============================
+        # =====================================================================
+        
+        # Initialize MOSEK solver and solve optimization problem
+        solver = pyo.SolverFactory("mosek")
+        results = solver.solve(model)
+        
+        # Check if solver found a feasible, bounded, optimal solution
+        if (results.solver.status == SolverStatus.ok) and (results.solver.termination_condition == TerminationCondition.optimal):
+            self.x_pred = np.asarray([[model.x[i,t]() for i in model.xIDX] for t in model.tIDX]).T
+            self.u_pred = np.asarray([model.u[:,t]() for t in model.tIDX]).T
+    
+            if SS is not None:
+                # (LMPC Only) Record lambda values
+                self.lamb  = np.asarray([model.lambVar[t]() for t in model.lIDX]).T
+        else:
+            self.x_pred = 999
+            self.u_pred = 999
+    
+    def model(self, x, u):
+        """This method returns the time evolution of states i.e x{k+1} = Ax_k + Bu_k +C
+			- x: state at previous time step (x_k)
+            - u: computed input at previous time step (u_k)
+		""" 
+        return (np.dot(self.A_k,x) + np.squeeze(np.dot(self.B_k,u)) + self.C_k).tolist()
+
+
+
+
+
+	
+
