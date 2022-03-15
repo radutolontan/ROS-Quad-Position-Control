@@ -59,8 +59,9 @@ def main():
     traj = 0
     	
 	# Initial Condition
-    x0 = np.array([0,0,0,0.68,0.03,0.8])
-    
+    x0 = np.array([0,0,0,0.68,-0.0,0.8])
+    x0_LMPC = np.array([0,0,0,0.68,0.04,0.8])
+
     # Initial conditions on inputs are set to allow smooth input changes
     u0 = np.array([0,0,dynamics.m*dynamics.g]).T
     
@@ -77,14 +78,14 @@ def main():
     ucl_feasible = []
     xt           = x0
     ut           = u0
-    time_index   = 0
+    MPC_Time   = 0
     
 	# Solve CTOFC for MPC
     while True:
-        xt = xcl_feasible[time_index] # Read system state
+        xt = xcl_feasible[MPC_Time] # Read system state
         
         start_time = tm.time()
-        CFTOC_MPC.solve(xt, ut, time_index, verbose = False) # Solve CFTOC
+        CFTOC_MPC.solve(xt, ut, MPC_Time) # Solve CFTOC
         end_time.append(tm.time() - start_time)
         
 		# Read input
@@ -92,23 +93,19 @@ def main():
         ucl_feasible.append(ut)
         
         # Run system dynamics
-        xcl_feasible.append(CFTOC_MPC.model(xcl_feasible[time_index], ut))
-        time_index += 1
+        xcl_feasible.append(CFTOC_MPC.model(xcl_feasible[MPC_Time], ut))
+        MPC_Time += 1
         
-        print("CFTOC #", time_index-1)
+        print("CFTOC #", MPC_Time-1)
         
         # Stop running when finish line is crossed from below
-        if (xt[1]>0) & (abs(xt[4]) <= 0.028):
+        if np.all((xt[1]>0, xt[4] >= 0.0, MPC_Time > 300)) == True:
             break
             
     print("AVG: ", np.mean(end_time))
     print("MAX: ", np.max(end_time))
     x_array = np.array(xcl_feasible)
     plot_trajectories(x_array)
-
-    
-    # Store iteration time
-    completion_time = [time_index]
     
     print("MPC Terminated!")
 
@@ -119,7 +116,7 @@ def main():
 	# Initialize LMPC objects
     N_LMPC = 7 # horizon length
     CFTOC_LMPC = CFTOC(N_LMPC, traj, dynamics, costs) # CFTOC solved by LMPC
-    lmpc = LMPC(CFTOC_LMPC, N_LMPC, CVX=True) # Initialize the LMPC (decide if you wanna use the CVX hull)
+    lmpc = LMPC(CFTOC_LMPC, N_LMPC, MPC_Time+1) # Initialize the LMPC
     lmpc.addTrajectory(xcl_feasible, ucl_feasible) # Add feasible trajectory to the safe set
 	
     totalIterations = 4 # Number of iterations to perform
@@ -129,35 +126,36 @@ def main():
     # Run LMPC
     for it in range (0,totalIterations):
         # Reset initial conditions and storage at each iteration
-        xcl = [x0] 
+        xcl = [x0_LMPC] 
         ucl =[]
         ut = u0
-        time_index = 0
         
 		# Solve CFTOC for LMPC
         while True:
 			# Read measurement
-            xt = xcl[time_index] 
+            xt = xcl[lmpc.t_index] 
 
 			# Solve CFTOC
-            lmpc.solve(xt, ut, time_index, verbose = False) 
-			# Read optimal input
+            lmpc.solve(xt, ut) 
+
+			# Read and apply optimal input to the system
             ut = lmpc.uPred[:,0]
-
-			# Apply optimal input to the system
             ucl.append(ut)
-            xcl.append(lmpc.cftoc.model(xcl[time_index], ut))
-            time_index += 1
+            xcl.append(lmpc.cftoc.model(xcl[lmpc.t_index], ut))
 
-            print("LMPC ",it+1,"|",time_index-1)
+            # Add new state to past iteration SS for loop-around purposes
+            lmpc.addtoPrevSS(xcl[-1])
+            lmpc.t_index += 1
+
+            print("LMPC ",it+1,"|",lmpc.t_index-1)
 
             # troubleshootin
-            #if (time_index==500):
-            #    x_LMPC = np.array(xcl)
-            #    plot_trajectories(x_LMPC)
+            if (lmpc.t_index==550):
+                x_LMPC = np.array(xcl)
+                plot_trajectories(x_LMPC)
                 
             # Quit when finish line is reached
-            if (xt[1]>0) & (abs(xt[4]) <= 0.028):
+            if lmpc.crossedFinish(np.reshape(xcl[-1],(6,1))) == True:
                 x_LMPC = np.array(xcl)
                 plot_trajectories(x_LMPC)
                 break
@@ -171,9 +169,7 @@ def main():
         # FOR PLOTTING AND TROUBLESHOOITNG
         #x_LMPC = np.array(xcl)
         #plot_trajectories(x_LMPC)
-        
-        # Store completion time
-        completion_time.append(time_index)
+
 
     
 	# =====================================================================================
@@ -202,7 +198,7 @@ def main():
     #plt.plot(xOpt[:,3], xOpt[:,4],'magenta')
     plot_trajectories(x_array)
     
-    print("Completion times: ", completion_time)
+    #print("Completion times: ", completion_time)
 
     
 def plot_trajectories(x):
@@ -258,3 +254,4 @@ def plot_trajectories(x):
 
 if __name__== "__main__":
     main()
+

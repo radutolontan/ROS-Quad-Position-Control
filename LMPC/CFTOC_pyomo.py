@@ -73,7 +73,7 @@ class CFTOC(object):
         return ref
         
         
-    def solve(self, x0, u0, time_index, verbose = False, SS = None, Qfun = None, CVX = None):
+    def solve(self, x0, u0, time_index, SS = None, Qfun = None):
         """This method solves an CFTOC problem given:
 			- x0: initial state condition
             - u0: previously applied input
@@ -241,4 +241,6 @@ class CFTOC(object):
 
 
 	
+
+
 
