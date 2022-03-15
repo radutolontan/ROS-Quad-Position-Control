@@ -84,7 +84,7 @@ def main():
         xt = xcl_feasible[MPC_Time] # Read system state
         
         start_time = tm.time()
-        CFTOC_MPC.solve(xt, ut, MPC_Time) # Solve CFTOC
+        CFTOC_MPC.solve_MPC(xt, ut, MPC_Time) # Solve CFTOC
         end_time.append(tm.time() - start_time)
         
 		# Read input
@@ -124,7 +124,7 @@ def main():
     
     # Run LMPC
     for it in range (0,totalIterations):
-        # Reset initial conditions and storage at each iteration
+        # Set initial conditions to the final states from the previous iteration
         xcl = [lmpc.SS[it][:,-1]] 
         ucl =[]
         ut = lmpc.uSS[it][:,-1]

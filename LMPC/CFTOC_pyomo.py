@@ -71,9 +71,150 @@ class CFTOC(object):
             ref = set_point(time_steps, frequency, setpoint)
                 
         return ref
+
+    def get_closestpoint(self, xt):
+        # Import full trajectory
+        full_traj = self.get_reftraj(0,1000)
+
+        # Reshape state into proper shape
+        xt = np.reshape(xt,(6,1))
+
+        # Find the point on the trajectory closest to the current state
+        MinNorm = np.argmin(np.linalg.norm(full_traj[3:6,:] - xt[3:6], 1, axis=0))   
+
+        return full_traj[:,MinNorm]  
+
+
+        if (self.trajectory_type == 0):
+            frequency = self.freq
+            radius = 0.7 # (m)
+            omega = 1.2 # (rad/s)
+            height = 0.8 # (m)
+            ref = circular_traj(time_steps, frequency, radius, omega, height)
+
+    def solve_MPC(self, x0, u0, time_index):
+        """This method solves an MPC CFTOC problem given:
+			- x0: initial state condition
+            - u0: previously applied input
+            - time_index: current time index, used to create reference trajectory preview
+		""" 
+        # Initialize optimization problem
+        model = pyo.ConcreteModel()
+        model.N = self.N
+        model.TS = 1/self.freq
+        model.nx = np.size(self.A, 0)
+        model.nu = np.size(self.B, 1)
         
+        # Length of finite optimization problem
+        model.tIDX = pyo.Set( initialize= range(model.N+1), ordered=True )  
+        model.xIDX = pyo.Set( initialize= range(model.nx), ordered=True )
+        model.uIDX = pyo.Set( initialize= range(model.nu), ordered=True )
+  
+        # Create pyomo objects for the linear system description
+        model.A = self.A
+        model.B = self.B
+        model.C = self.C
         
-    def solve(self, x0, u0, time_index, SS = None, Qfun = None):
+        # Create pyomo objects for the cost matrices
+        model.Q = self.Q
+        model.Qf = self.Qf
+        model.R = self.R
+        model.dR = self.dR
+        
+        # Generate Trajectory Preview
+        preview = self.get_reftraj(time_index, self.N)
+        
+    	# =====================================================================
+        # =======================  DECISION VARIABLES  ========================
+        # =====================================================================
+        model.x = pyo.Var(model.xIDX, model.tIDX)
+        model.u = pyo.Var(model.uIDX, model.tIDX)
+            
+    	# =====================================================================
+        # ===========================  CONSTRAINTS  ===========================
+        # =====================================================================
+
+		# Initial Condition Constraints
+        model.initial_conditions = pyo.Constraint(model.xIDX, 
+                                                  rule=lambda model,i: model.x[i,0]==x0[i])
+            
+        # System Dynamics Constraints
+        def LTI_system(model, i, t):
+            return  model.x[i, t+1] - (model.x [i, t] + model.TS * (sum(model.A[i, j] * model.x[j, t] for j in model.xIDX) 
+                                                         + sum(model.B[i, j] * model.u[j, t] for j in model.uIDX) + model.C[i])) == 0 if t < model.N else pyo.Constraint.Skip
+        model.system_constraints = pyo.Constraint(model.xIDX, model.tIDX, rule=LTI_system)
+ 
+
+        # Input Constraints
+        model.input_constraints1 = pyo.Constraint(model.uIDX, model.tIDX, 
+                                                  rule=lambda model,i,t: model.u[i,t]<=self.F_max[i])
+        model.input_constraints2 = pyo.Constraint(model.uIDX, model.tIDX, 
+                                                  rule=lambda model,i,t: model.u[i,t]>=self.F_min[i])
+               
+        # =====================================================================
+        # ==============================  COST  ===============================
+        # =====================================================================
+        
+        def objective(model):
+            # Initialize costs with zero
+            costX = 0.0
+            costU = 0.0
+            costdU = 0.0
+            costTerminal = 0.0
+            
+            for t in model.tIDX:
+                # STAGE COST ON STATES
+                # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref)
+                for i in model.xIDX:
+                    for j in model.xIDX:
+                        if t < model.N-1:
+                            costX += (model.x[i, t] - preview[i,t]) * model.Q[i, j] * (model.x[j, t] - preview[j,t])
+                
+                for i in model.uIDX:
+                    for j in model.uIDX:
+                        if t < model.N:
+                            # STAGE COST ON INPUTS
+                            # Jinput = (u_k).T * R * (u_k) (stage cost on inputs)
+                            costU += model.u[i, t] * model.R[i, j] * model.u[j, t]
+                            
+                    # STAGE COST ON RATE OF INPUT CHANGE
+                    # Jdinput = (u_{k+1} - u_k).T * dR * (u_{k+1} - u_k)
+                    if t < model.N-1:
+                        costdU += model.dR[i,i] * (model.u[i, t+1] - model.u[i, t])**2   
+                    
+            # Update stage cost on rate of input change to incorporate first input      
+            for i in model.uIDX:
+                costdU += model.dR[i,i] * (model.u[i, 0] - u0[i])**2  
+
+            else:
+                # TERMINAL COST ON STATES
+                # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref)
+                for i in model.xIDX:
+                    for j in model.xIDX:
+                        costTerminal += (model.x[i, model.N-1] - preview[i,model.N-1]) * model.Qf[i, j] * (model.x[j, model.N-1] - preview[j,model.N-1])
+                
+            return costX + costU + costdU + costTerminal
+        
+        model.cost = pyo.Objective(rule = objective, sense = pyo.minimize)
+    
+        # =====================================================================
+        # =============================  SOLVER  ==============================
+        # =====================================================================
+        
+        # Initialize MOSEK solver and solve optimization problem
+        solver = pyo.SolverFactory("mosek")
+        results = solver.solve(model)
+        
+        # Check if solver found a feasible, bounded, optimal solution
+        if (results.solver.status == SolverStatus.ok) and (results.solver.termination_condition == TerminationCondition.optimal):
+            self.x_pred = np.asarray([[model.x[i,t]() for i in model.xIDX] for t in model.tIDX]).T
+            self.u_pred = np.asarray([model.u[:,t]() for t in model.tIDX]).T
+    
+        else:
+            self.x_pred = 999
+            self.u_pred = 999
+
+    def solve_LMPC(self, x0, u0, time_index, SS = None, Qfun = None):
         """This method solves an CFTOC problem given:
 			- x0: initial state condition
             - u0: previously applied input
