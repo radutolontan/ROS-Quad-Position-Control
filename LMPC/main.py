@@ -59,8 +59,7 @@ def main():
     traj = 0
     	
 	# Initial Condition
-    x0 = np.array([0,0,0,0.68,-0.0,0.8])
-    x0_LMPC = np.array([0,0,0,0.68,0.04,0.8])
+    x0 = np.array([0,0,0,0.8,0,0.8])
 
     # Initial conditions on inputs are set to allow smooth input changes
     u0 = np.array([0,0,dynamics.m*dynamics.g]).T
@@ -126,9 +125,9 @@ def main():
     # Run LMPC
     for it in range (0,totalIterations):
         # Reset initial conditions and storage at each iteration
-        xcl = [x0_LMPC] 
+        xcl = [lmpc.SS[it][:,-1]] 
         ucl =[]
-        ut = u0
+        ut = lmpc.uSS[it][:,-1]
         
 		# Solve CFTOC for LMPC
         while True:
@@ -143,7 +142,7 @@ def main():
             ucl.append(ut)
             xcl.append(lmpc.cftoc.model(xcl[lmpc.t_index], ut))
 
-            # Add new state to past iteration SS for loop-around purposes
+            # Add new state to past iteration SS to enable loop-around 
             lmpc.addtoPrevSS(xcl[-1])
             lmpc.t_index += 1
 
@@ -156,6 +155,7 @@ def main():
                 
             # Quit when finish line is reached
             if lmpc.crossedFinish(np.reshape(xcl[-1],(6,1))) == True:
+                del xcl[0]
                 x_LMPC = np.array(xcl)
                 plot_trajectories(x_LMPC)
                 break

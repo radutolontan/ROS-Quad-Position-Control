@@ -3,6 +3,7 @@ from pickle import TRUE
 import numpy as np
 from numpy import True_, linalg as la
 from numpy.linalg import norm
+import matplotlib.pyplot as plt
 import pdb
 import copy
 import itertools
@@ -24,7 +25,7 @@ class LMPC(object):
         self.it    = 0
         self.xPred = []
         # SS subset parameters
-        self.p = 2 # build SS subset from last 'p' iterations only
+        self.p = 4 # build SS subset from last 'p' iterations only
         self.n = 40 # return 'n' closest terms (WARNING: SS_future_n returns 'n' states for each 'p' iteration)
     
     def addTrajectory(self, x, u):
@@ -33,16 +34,16 @@ class LMPC(object):
         self.t_index = 0
 
         # If LMPC is running
-        if self.SS is not None:
+        if self.SS!=[]:
             # Store completion time
             self.LapTime.append(self.t_index+1)
 
 		# Add the feasible trajectory x and the associated input sequence u to the safe set
         self.SS.append(np.array(copy.copy(x)).T)
-        self.uSS.append(copy.copy(u))
+        self.uSS.append(np.array(copy.copy(u)).T)
 
 		# Compute and store the cost associated with the feasible trajectory
-        cost = self.computeCost(x, u)
+        cost = self.computeCost_rollout(x, u)
         self.Qfun.append(np.array(cost))
 
 		# Initialize zVector
@@ -81,6 +82,19 @@ class LMPC(object):
 		
 		# Finally flip the cost to have correct order
         return np.flip(cost).tolist()
+
+    def computeCost_rollout(self, x, u):
+        """compute roll-out cost
+        Arguments:
+            x: closed-loop trajectory
+            u: applied inputs
+        """
+        x = np.array(x)
+        Cost = np.empty((x.shape[0]))
+        for jj in range(0, x.shape[0]):
+            Cost[jj] = x.shape[0] - jj - 1
+
+        return Cost
 
     def crossedFinish(self, states):
         """
@@ -236,8 +250,14 @@ class LMPC(object):
             SS_it = self.SS[curr_it]
             Qfun_it = self.Qfun[curr_it]      
             
-            # Return index of column w. smallest squared error 2-norm
-            MinNorm = np.argmin(np.linalg.norm(SS_it[:,0:self.LapTime[curr_it]] - xt, axis=0))     
+            slack = 0
+            # When a new iteration is starting, the MinNorm might pick up the last states of the 
+            # previous iteration if slack is not used
+            if self.t_index<=10 :
+                slack = 40
+
+            # Return index of column w. smallest squared error 2-norm of POSITION vector ([3:6])
+            MinNorm = np.argmin(np.linalg.norm(SS_it[3:6,0:self.LapTime[curr_it]-slack] - xt[3:6], 1, axis=0))     
             
             # Compute indices being returned
             if (MinNorm - self.n/2 >= 0):
@@ -279,6 +299,15 @@ class LMPC(object):
         
 		# Solve the CFTOC 
         self.cftoc.solve(xt, ut, self.t_index, SS_selected, Qfun_selected)
+
+        # Troubleshoot Plotting
+        if (self.t_index>=540):
+            plt.plot(SS_selected[3,:],SS_selected[4,:],'magenta')
+            plt.plot(self.xPred[3,:],self.xPred[4,:],'green')
+            #plt.plot(self.SS[0][3,:],self.SS[0][4,:],'red')
+            plt.legend(['SS_Selected','Previous xPred'])
+            plt.show()
+
 
 		# Update predicted trajectory
         self.xPred= self.cftoc.x_pred
