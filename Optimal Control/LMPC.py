@@ -24,17 +24,25 @@ class LMPC(object):
         self.dR = cftoc.dR
         self.it    = 0
         self.xPred = []
+
         # SS subset parameters
         self.p = 4 # build SS subset from last 'p' iterations only
         self.n = 40 # return 'n' closest terms (WARNING: SS_future_n returns 'n' states for each 'p' iteration)
-    
+        self.delta = 0.2 # used to define state constraints (as max deviation delta)
+        
+        # Vector which holds 1s for predicted states (xPred) over the finish line and 0s otherwise
+        self.pred_over_finish = 0 
+
+        # Array which holds closest point on reference trajectory to current state
+        self.closest_pt_traj = 0
+
     def addTrajectory(self, x, u):
 
         # Set/Reset Time Index
         self.t_index = 0
 
         # If LMPC is running
-        if self.SS!=[]:
+        if self.SS != []:
             # Store completion time
             self.LapTime.append(self.t_index+1)
 
@@ -51,6 +59,9 @@ class LMPC(object):
 
 		# Augment iteration counter and print the cost of the trajectories stored in the safe set
         self.it = self.it + 1
+
+        # Reset values
+        self.xPred = []
 
         #print("Trajectory added to the Safe Set. Current Iteration: ", self.it)
         #print("Performance stored trajectories: \n", [self.Qfun[i][0] for i in range(0, self.it)])
@@ -95,27 +106,6 @@ class LMPC(object):
             Cost[jj] = x.shape[0] - jj - 1
 
         return Cost
-
-    def crossedFinish(self, states):
-        """
-        Function takes in a vector of states (so a matrix) and returns a T/F vector indicating which
-        column in the matrix corrresponds to a state beyond the finish line. 
-
-        states: veector of states (initialized as xPred)
-        """
-        # Initialize storage
-        crossLinevec = np.zeros(states.shape[1])
-        
-        # For the first time CFTOC is solved in an iteration, return zeros
-        if states==[]:
-            return crossLinevec
-        # Otherwise check to see if state in each column has passed the f_line
-        else:
-            for jj in range(states.shape[1]):
-                # Time index (t_index) is used to ensure the states at the beginning are not picked up
-                if all((states[1,jj]>0, states[4,jj] >= 0.0, self.t_index > 300)) == True:
-                    crossLinevec[jj] = 1
-            return crossLinevec
 
     def SS_future_N(self, xt, completion_time):
         """
@@ -271,12 +261,12 @@ class LMPC(object):
             # Select corresponing Q_fun subset and adjust terms after crossing finish line
             if self.xPred == []: # used on first CFTOC of new lap when xPred does not exist yet
                 Qfun_subset = np.hstack((Qfun_subset, Qfun_it[indexSSandQfun]))
-            elif (np.any(self.crossedFinish(self.xPred)) == False): # used for all states that generate predictions before finish line
+            elif (np.any(self.pred_over_finish) == False): # used for all states that generate predictions before finish line
                 Qfun_subset = np.hstack((Qfun_subset, Qfun_it[indexSSandQfun]))
             elif curr_it < self.it - 1:
                 Qfun_subset = np.hstack((Qfun_subset, Qfun_it[indexSSandQfun] + Qfun_it[0]))
             else:
-                predCurrLap = self.N_LMPC - sum(self.crossedFinish(self.xPred))
+                predCurrLap = self.N_LMPC - sum(self.pred_over_finish)
                 currLapTime = self.t_index
                 Qfun_subset = np.hstack((Qfun_subset, Qfun_it[indexSSandQfun] + currLapTime + predCurrLap))
 
@@ -298,7 +288,7 @@ class LMPC(object):
         SS_selected, Qfun_selected = self.SS_local_N(xt)
         
 		# Solve the CFTOC 
-        self.cftoc.solve(xt, ut, self.t_index, SS_selected, Qfun_selected)
+        self.cftoc.solve_LMPC(xt, ut, self.delta, SS_selected, Qfun_selected)
 
         # Troubleshoot Plotting
         if (self.t_index>=540):
@@ -307,7 +297,6 @@ class LMPC(object):
             #plt.plot(self.SS[0][3,:],self.SS[0][4,:],'red')
             plt.legend(['SS_Selected','Previous xPred'])
             plt.show()
-
 
 		# Update predicted trajectory
         self.xPred= self.cftoc.x_pred

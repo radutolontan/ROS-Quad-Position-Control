@@ -1,6 +1,9 @@
+"""
+Run this script to test MPC and LMPC position controllers in Python.
+"""
+
 import numpy as np
 import pdb
-#matplotlib.use('TkAgg')
 import matplotlib.pyplot as plt
 import copy
 import pickle
@@ -147,11 +150,6 @@ def main():
             lmpc.t_index += 1
 
             print("LMPC ",it+1,"|",lmpc.t_index-1)
-
-            # troubleshootin
-            if (lmpc.t_index==550):
-                x_LMPC = np.array(xcl)
-                plot_trajectories(x_LMPC)
                 
             # Quit when finish line is reached
             if lmpc.crossedFinish(np.reshape(xcl[-1],(6,1))) == True:
@@ -165,37 +163,11 @@ def main():
 		# Add trajectory to update the safe set and value function
         lmpc.addTrajectory(xcl, ucl)
         
-        
-        # FOR PLOTTING AND TROUBLESHOOITNG
-        #x_LMPC = np.array(xcl)
-        #plot_trajectories(x_LMPC)
-
-
-    
-	# =====================================================================================
-    
-	# ====================================================================================
-	# Compute optimal solution by solving a FTOCP with long horizon
-	# ====================================================================================
-    """
-    N = 1000 # Set a very long horizon to fake infinite time optimal control problem
-    CFTOC_Full = CFTOC(N, traj, dynamics, costs)
-    CFTOC_Full.solve(x0,0)
-    xOpt = CFTOC_Full.xPred
-    uOpt = CFTOC_Full.uPred
-    """
-    #costOpt = lmpc.computeCost(xOpt.T.tolist(), uOpt.T.tolist())
-    #print("Optimal cost is: ", costOpt[0])
-	# Store optimal solution in the lmpc object
-    #lmpc.optCost = costOpt[0]
-    #lmpc.xOpt    = xOpt
-
 	# Save the lmpc object
     #filename = 'lmpc_object.pkl'
     #filehandler = open(filename, 'wb')
     #pickle.dump(lmpc, filehandler)
-    #plt.plot(x_array[:,3], x_array[:,4],'green')
-    #plt.plot(xOpt[:,3], xOpt[:,4],'magenta')
+   
     plot_trajectories(x_array)
     
     #print("Completion times: ", completion_time)

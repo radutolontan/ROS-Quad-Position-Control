@@ -1,20 +1,20 @@
 import numpy as np
+import numpy.linalg as la
 import pdb 
 import scipy
 import time as tm
 import pyomo.environ as pyo
 from pyomo.opt import SolverStatus, TerminationCondition
 import mosek
-from trajectories import circular_traj, set_point
-
 
 class CFTOC(object):
     """ Constrained Finite Time Optimal Control (CFTOC)
 	Methods:
-		- solve: solves the CFTOC problem given the initial condition x0, terminal contraints (optinal) and terminal cost (optional)
+		- solve_MPC: solves the CFTOC problem for MPC using LQR costs
+        - solve_LMPC: solves CFTOC problem for LMPC using SS, Qfunction, and sigmoid cost
 		- model: given x_t and u_t computes x_{t+1} = Ax_t + Bu_t
 	"""
-    def __init__(self, N, trajectory_type, dynamics, costs):
+    def __init__(self, N, dynamics, costs):
 		# System constraints
         self.F_min = [-10,-10, 0]
         self.F_max = [ 10, 10,20]
@@ -29,7 +29,7 @@ class CFTOC(object):
         self.n = self.A.shape[1]
         self.d = self.B.shape[1]
 
-		# Stage Cost (h(x,u) = (x-x_ref)^TQ(x-x_ref) +u^TRu +(u_{k+1}-u_k)^tdR(u_{k+1}-u_k))
+		# Stage Cost (h(x,u) = (x-x_ref)^TQ(x-x_ref) + u^TRu + (u_{k+1}-u_k)^tdR(u_{k+1}-u_k))
         self.Q = costs.Q
         self.R = costs.R
         self.dR = costs.dR
@@ -41,62 +41,15 @@ class CFTOC(object):
         self.xPred = []
         self.uPred = []
         
-        # Selected trajectory 
-        self.trajectory_type = trajectory_type
-        
         # Selected running frequency and horizon
         self.freq = dynamics.freq
         self.N = N
-        
-    def get_reftraj(self, time, horizon):
-        """This method returns the reference trajectory preview for N timesteps given:
-			- time: the current time index
-            - type_traj: 0 for circular trajectory
-		""" 
-        # Define next N time steps from current time index
-        time_steps = np.linspace(time, time+horizon, horizon+1) 
-        
-        # CIRCULAR TRAJECTORY
-        if (self.trajectory_type == 0):
-            frequency = self.freq
-            radius = 0.7 # (m)
-            omega = 1.2 # (rad/s)
-            height = 0.8 # (m)
-            ref = circular_traj(time_steps, frequency, radius, omega, height)
-        
-        # SETPOINT
-        elif (self.trajectory_type == 1):
-            frequency = self.freq
-            setpoint = np.array ([0.1,0.1,0.1]) # (m,m,m)
-            ref = set_point(time_steps, frequency, setpoint)
-                
-        return ref
 
-    def get_closestpoint(self, xt):
-        # Import full trajectory
-        full_traj = self.get_reftraj(0,1000)
-
-        # Reshape state into proper shape
-        xt = np.reshape(xt,(6,1))
-
-        # Find the point on the trajectory closest to the current state
-        MinNorm = np.argmin(np.linalg.norm(full_traj[3:6,:] - xt[3:6], 1, axis=0))   
-
-        return full_traj[:,MinNorm]  
-
-
-        if (self.trajectory_type == 0):
-            frequency = self.freq
-            radius = 0.7 # (m)
-            omega = 1.2 # (rad/s)
-            height = 0.8 # (m)
-            ref = circular_traj(time_steps, frequency, radius, omega, height)
-
-    def solve_MPC(self, x0, u0, time_index):
+    def solve_MPC(self, x0, u0, preview):
         """This method solves an MPC CFTOC problem given:
 			- x0: initial state condition
             - u0: previously applied input
-            - time_index: current time index, used to create reference trajectory preview
+            - preview: reference trajectory preview
 		""" 
         # Initialize optimization problem
         model = pyo.ConcreteModel()
@@ -120,9 +73,6 @@ class CFTOC(object):
         model.Qf = self.Qf
         model.R = self.R
         model.dR = self.dR
-        
-        # Generate Trajectory Preview
-        preview = self.get_reftraj(time_index, self.N)
         
     	# =====================================================================
         # =======================  DECISION VARIABLES  ========================
@@ -214,13 +164,13 @@ class CFTOC(object):
             self.x_pred = 999
             self.u_pred = 999
 
-    def solve_LMPC(self, x0, u0, time_index, SS = None, Qfun = None):
+    def solve_LMPC(self, x0, u0, max_dev, SS, Qfun):
         """This method solves an CFTOC problem given:
 			- x0: initial state condition
             - u0: previously applied input
-            - time_index: current time index, used to create reference trajectory preview
-			- SS: (optional) contains a set of state and the terminal constraint is ConvHull(SS)
-			- Qfun: (optional) cost associtated with the state stored in SS. Terminal cost is BarycentrcInterpolation(SS, Qfun)
+            - max_dev: maximum allowable deviation from trajectory
+			- SS: contains a set of state and the terminal constraint is ConvHull(SS)
+			- Qfun: cost associtated with the state stored in SS. Terminal cost is BarycentrcInterpolation(SS, Qfun)
 		""" 
         # Initialize optimization problem
         model = pyo.ConcreteModel()
@@ -228,11 +178,13 @@ class CFTOC(object):
         model.TS = 1/self.freq
         model.nx = np.size(self.A, 0)
         model.nu = np.size(self.B, 1)
+        model.SS_size = SS.shape[1]
         
         # Length of finite optimization problem
         model.tIDX = pyo.Set( initialize= range(model.N+1), ordered=True )  
         model.xIDX = pyo.Set( initialize= range(model.nx), ordered=True )
         model.uIDX = pyo.Set( initialize= range(model.nu), ordered=True )
+        model.lIDX = pyo.Set( initialize= range(model.SS_size), ordered=True )  
   
         # Create pyomo objects for the linear system description
         model.A = self.A
@@ -244,25 +196,22 @@ class CFTOC(object):
         model.Qf = self.Qf
         model.R = self.R
         model.dR = self.dR
-        
-        # Generate Trajectory Preview
-        preview = self.get_reftraj(time_index, self.N)
+
+        # LMPC Objects
+        model.SS = SS
+        model.Qfun = Qfun
+
+        # Import closest point on trajectory to current state
+        x_Q = self.get_closestpoint(x0)
         
     	# =====================================================================
         # =======================  DECISION VARIABLES  ========================
         # =====================================================================
+
         model.x = pyo.Var(model.xIDX, model.tIDX)
         model.u = pyo.Var(model.uIDX, model.tIDX)
+        model.lambVar = pyo.Var(model.lIDX)
         
-		# (LMPC ONLY) initialize lambda
-        if SS is not None:
-            model.SS = SS
-            model.Qfun = Qfun
-            # Capture number of entries in SS
-            model.SS_size = SS.shape[1]
-            model.lIDX = pyo.Set( initialize= range(model.SS_size), ordered=True )  
-            model.lambVar = pyo.Var(model.lIDX)
-            
     	# =====================================================================
         # ===========================  CONSTRAINTS  ===========================
         # =====================================================================
@@ -283,21 +232,24 @@ class CFTOC(object):
                                                   rule=lambda model,i,t: model.u[i,t]<=self.F_max[i])
         model.input_constraints2 = pyo.Constraint(model.uIDX, model.tIDX, 
                                                   rule=lambda model,i,t: model.u[i,t]>=self.F_min[i])
-        
-        # (LMPC ONLY) initialize safe set constraints
-        if SS is not None:
-            # Positive lambda
-            model.lambVar_positive = pyo.Constraint(model.lIDX, 
-                                                    rule=lambda model,i: model.lambVar[i]>=0)
-            
-            # Sum lambda to 1
-            model.lambVar_sum = pyo.Constraint(expr=sum(model.lambVar[i] for i in model.lIDX) == 1 )
 
-            # Final state in safe set            
-            def enforce_SS(model, i):
-                return sum(model.SS[i,j] * model.lambVar[j] for j in model.lIDX) == model.x[i, model.N-1]
-              
-            model.lambVar_inSS = pyo.Constraint(model.xIDX, rule=enforce_SS)     
+        # State Corridor Constraints
+        model.corridor_constraints1 = pyo.Constraint(range(3,6), model.tIDX, 
+                                                  rule=lambda model,i,t: model.x[i,t]<=x_Q[i]+max_dev)
+        model.corridor_constraints2 = pyo.Constraint(range(3,6), model.tIDX, 
+                                                  rule=lambda model,i,t: model.x[i,t]>=x_Q[i]-max_dev)
+        
+        # SS Constraints 1 - Positive lambda
+        model.lambVar_positive = pyo.Constraint(model.lIDX, 
+                                                rule=lambda model,i: model.lambVar[i]>=0)
+        
+        # SS Constraints 2 - Sum lambda to 1
+        model.lambVar_sum = pyo.Constraint(expr=sum(model.lambVar[i] for i in model.lIDX) == 1 )
+
+        # SS Constraints 3 - Final state inside SS            
+        def enforce_SS(model, i):
+            return sum(model.SS[i,j] * model.lambVar[j] for j in model.lIDX) == model.x[i, model.N-1]
+        model.lambVar_inSS = pyo.Constraint(model.xIDX, rule=enforce_SS)     
                 
         # =====================================================================
         # ==============================  COST  ===============================
@@ -311,13 +263,19 @@ class CFTOC(object):
             costTerminal = 0.0
             
             for t in model.tIDX:
-                # STAGE COST ON STATES
-                # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref)
-                for i in model.xIDX:
-                    for j in model.xIDX:
-                        if t < model.N-1:
-                            costX += (model.x[i, t] - preview[i,t]) * model.Q[i, j] * (model.x[j, t] - preview[j,t])
+
                 
+                """
+                # SIGMOID COST ON STATES
+                # h_k = ||x_k - x_G||^2 / sqrt(||x_k - x_G||^4 + 1)
+                x_G = np.reshape(np.array([0, 0, 0, 0.8, 0, 0.8]), (6,1)) # GOAL
+                for i in range(3,6): # Apply only on position!
+                    if t < model.N-1:
+                        costX += (model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)/ np.sqrt((model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)**2+1) 
+                        #costX += model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2               
+                        #costX += (la.norm((model.x[i,t]-x_G[i]), 1, axis=0)**2) / 
+                        #          np.sqrt(la.norm(model.x[i,t]-x_G[i], 1, axis=0)**4 + 1)
+                """
                 for i in model.uIDX:
                     for j in model.uIDX:
                         if t < model.N:
@@ -334,20 +292,11 @@ class CFTOC(object):
             for i in model.uIDX:
                 costdU += model.dR[i,i] * (model.u[i, 0] - u0[i])**2  
         
-            if SS is not None:
-                # (LMPC Only) Value Function
-                for l in model.lIDX:
-                    costTerminal += model.lambVar[l] * model.Qfun[0][l]
-
-            else:
-                # TERMINAL COST ON STATES
-                # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref)
-                for i in model.xIDX:
-                    for j in model.xIDX:
-                        costTerminal += (model.x[i, model.N-1] - preview[i,model.N-1]) * model.Qf[i, j] * (model.x[j, model.N-1] - preview[j,model.N-1])
-                
+            # LMPC Value Function
+            for l in model.lIDX:
+                costTerminal += model.lambVar[l] * model.Qfun[0][l]
+  
             return costX + costU + costdU + costTerminal
-        
         model.cost = pyo.Objective(rule = objective, sense = pyo.minimize)
     
         # =====================================================================
@@ -362,10 +311,7 @@ class CFTOC(object):
         if (results.solver.status == SolverStatus.ok) and (results.solver.termination_condition == TerminationCondition.optimal):
             self.x_pred = np.asarray([[model.x[i,t]() for i in model.xIDX] for t in model.tIDX]).T
             self.u_pred = np.asarray([model.u[:,t]() for t in model.tIDX]).T
-    
-            if SS is not None:
-                # (LMPC Only) Record lambda values
-                self.lamb  = np.asarray([model.lambVar[t]() for t in model.lIDX]).T
+            self.lamb  = np.asarray([model.lambVar[t]() for t in model.lIDX]).T
         else:
             self.x_pred = 999
             self.u_pred = 999
