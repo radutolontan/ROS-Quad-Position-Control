@@ -260,13 +260,6 @@ class CFTOC(object):
             costTerminal = 0.0
             
             for t in model.tIDX:
-             # STAGE COST ON STATES
-                # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref)
-                #for i in model.xIDX:
-                #    for j in model.xIDX:
-                #        if t < model.N-1:
-                #            costX += (model.x[i, t] - preview[i,t]) * model.Q[i, j] * (model.x[j, t] - preview[j,t])
-                
                 # SIGMOID COST ON STATES
                 # h_k = ||x_k - x_G||^2 / sqrt(||x_k - x_G||^4 + 1)
                 x_G = np.array([0, 0, 0, 0.8, 0, 0.8]) # GOAL
