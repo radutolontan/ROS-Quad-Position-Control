@@ -2,6 +2,7 @@
 This class is used to create reference trajectories for all types of position controllers
 """
 import numpy as np
+import numpy.linalg as la
 
 class Trajectory(object):
 

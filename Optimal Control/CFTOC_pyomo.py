@@ -146,13 +146,13 @@ class CFTOC(object):
             return costX + costU + costdU + costTerminal
         
         model.cost = pyo.Objective(rule = objective, sense = pyo.minimize)
-    
+
         # =====================================================================
         # =============================  SOLVER  ==============================
         # =====================================================================
         
         # Initialize MOSEK solver and solve optimization problem
-        solver = pyo.SolverFactory("mosek")
+        solver = pyo.SolverFactory('mosek')
         results = solver.solve(model)
         
         # Check if solver found a feasible, bounded, optimal solution
@@ -164,7 +164,7 @@ class CFTOC(object):
             self.x_pred = 999
             self.u_pred = 999
 
-    def solve_LMPC(self, x0, u0, max_dev, SS, Qfun):
+    def solve_LMPC(self, x0, u0, max_dev, SS, Qfun, preview, x_Q):
         """This method solves an CFTOC problem given:
 			- x0: initial state condition
             - u0: previously applied input
@@ -200,9 +200,6 @@ class CFTOC(object):
         # LMPC Objects
         model.SS = SS
         model.Qfun = Qfun
-
-        # Import closest point on trajectory to current state
-        x_Q = self.get_closestpoint(x0)
         
     	# =====================================================================
         # =======================  DECISION VARIABLES  ========================
@@ -263,19 +260,21 @@ class CFTOC(object):
             costTerminal = 0.0
             
             for t in model.tIDX:
-
+             # STAGE COST ON STATES
+                # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref)
+                #for i in model.xIDX:
+                #    for j in model.xIDX:
+                #        if t < model.N-1:
+                #            costX += (model.x[i, t] - preview[i,t]) * model.Q[i, j] * (model.x[j, t] - preview[j,t])
                 
-                """
                 # SIGMOID COST ON STATES
                 # h_k = ||x_k - x_G||^2 / sqrt(||x_k - x_G||^4 + 1)
-                x_G = np.reshape(np.array([0, 0, 0, 0.8, 0, 0.8]), (6,1)) # GOAL
-                for i in range(3,6): # Apply only on position!
-                    if t < model.N-1:
-                        costX += (model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)/ np.sqrt((model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)**2+1) 
-                        #costX += model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2               
-                        #costX += (la.norm((model.x[i,t]-x_G[i]), 1, axis=0)**2) / 
-                        #          np.sqrt(la.norm(model.x[i,t]-x_G[i], 1, axis=0)**4 + 1)
-                """
+                x_G = np.array([0, 0, 0, 0.8, 0, 0.8]) # GOAL
+                if t < model.N-1:
+                    #costX += (model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)/(model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)**2+1
+                    #costX += model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2               
+                    costX += ((model.x[3,t] - x_G[3])**2 + (model.x[4,t] - x_G[4])**2 + (model.x[5,t] - x_G[5])**2) / ((model.x[3,t] - x_G[3])**2 + (model.x[4,t] - x_G[4])**2 + (model.x[5,t] - x_G[5])**2 + 1)
+                
                 for i in model.uIDX:
                     for j in model.uIDX:
                         if t < model.N:
@@ -304,7 +303,7 @@ class CFTOC(object):
         # =====================================================================
         
         # Initialize MOSEK solver and solve optimization problem
-        solver = pyo.SolverFactory("mosek")
+        solver = pyo.SolverFactory('ipopt')
         results = solver.solve(model)
         
         # Check if solver found a feasible, bounded, optimal solution

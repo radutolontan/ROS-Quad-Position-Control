@@ -282,13 +282,13 @@ class LMPC(object):
 
         return SS_subset, Qfun_subset
 
-    def solve(self, xt, ut):
+    def solve(self, xt, ut, preview):
 			
         # Build local SS subset used for LMPC 
         SS_selected, Qfun_selected = self.SS_local_N(xt)
         
 		# Solve the CFTOC 
-        self.cftoc.solve_LMPC(xt, ut, self.delta, SS_selected, Qfun_selected)
+        self.cftoc.solve_LMPC(xt, ut, self.delta, SS_selected, Qfun_selected, preview, self.closest_pt_traj)
 
         # Troubleshoot Plotting
         if (self.t_index>=540):

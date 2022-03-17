@@ -119,7 +119,7 @@ def main():
     
 	# Initialize LMPC objects
     N_LMPC = 7 # horizon length
-    CFTOC_LMPC = CFTOC(N_LMPC, traj, dynamics, costs) # CFTOC solved by LMPC
+    CFTOC_LMPC = CFTOC(N_LMPC, dynamics, costs) # CFTOC solved by LMPC
     lmpc = LMPC(CFTOC_LMPC, N_LMPC, MPC_Time+1) # Initialize the LMPC
     lmpc.addTrajectory(xcl_feasible, ucl_feasible) # Add feasible trajectory to the safe set
 	
@@ -140,12 +140,13 @@ def main():
             xt = xcl[lmpc.t_index] 
 
             # Check if any predicted states are over the finish line
+            preview = trajectory.get_reftraj(lmpc.t_index, N_LMPC)
             lmpc.closest_pt_traj = trajectory.get_closestpoint(xt)
             if (lmpc.xPred != []):
-                lmpc.pred_over_finish = trajectory.crossedFinish(lmpc.xPred)
+                lmpc.pred_over_finish = trajectory.crossedFinish(lmpc.xPred, lmpc.t_index)
 
 			# Solve CFTOC
-            lmpc.solve(xt, ut) 
+            lmpc.solve(xt, ut, preview) 
 
 			# Read and apply optimal input to the system
             ut = lmpc.uPred[:,0]
@@ -159,7 +160,7 @@ def main():
             print("LMPC ",it+1,"|",lmpc.t_index-1)
                 
             # Quit when finish line is reached
-            if trajectory.crossedFinish(np.reshape(xcl[-1],(6,1))) == True:
+            if trajectory.crossedFinish(np.reshape(xcl[-1],(6,1)), lmpc.t_index) == True:
                 del xcl[0]
                 x_LMPC = np.array(xcl)
                 plot_trajectories(x_LMPC)
