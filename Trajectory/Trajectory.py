@@ -82,7 +82,14 @@ class Trajectory(object):
         # Find the point on the trajectory closest to the current state
         MinNorm = np.argmin(la.norm(full_traj[3:6,:] - xt[3:6], 1, axis=0))   
 
-        return full_traj[:,MinNorm+1]  
+        return full_traj[:,MinNorm] 
+
+    def get_goalpoint(self):
+        # Import start/end point
+        goal_coordinates = self.get_reftraj(0,0) 
+
+        return np.reshape(goal_coordinates,(6,1)) 
+ 
 
     def get_reftraj(self, t_index, horizon, setpoint=0):
         """   (MPC Position Controller )

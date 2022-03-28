@@ -164,14 +164,18 @@ class CFTOC(object):
             self.x_pred = 999
             self.u_pred = 999
 
-    def solve_LMPC(self, x0, u0, max_dev, SS, Qfun, preview, x_Q):
-        """This method solves an CFTOC problem given:
+    def solve_LMPC(self, x0, u0, max_dev, slack_goal, SS, Qfun, x_Q, x_G):
+        """
+        This method solves an LMPC CFTOC problem given:
 			- x0: initial state condition
             - u0: previously applied input
             - max_dev: maximum allowable deviation from trajectory
+            - slack_goal: used to define nearness to goal for optimal time cost
 			- SS: contains a set of state and the terminal constraint is ConvHull(SS)
 			- Qfun: cost associtated with the state stored in SS. Terminal cost is BarycentrcInterpolation(SS, Qfun)
-		""" 
+            - x_Q: closest point on trajectory coordinates in cartesian
+            - x_G: goal state coordinates in cartesian
+        """ 
         # Initialize optimization problem
         model = pyo.ConcreteModel()
         model.N = self.N
@@ -179,6 +183,9 @@ class CFTOC(object):
         model.nx = np.size(self.A, 0)
         model.nu = np.size(self.B, 1)
         model.SS_size = SS.shape[1]
+
+        # Define Big M method constant
+        big_M = 10**6
         
         # Length of finite optimization problem
         model.tIDX = pyo.Set( initialize= range(model.N+1), ordered=True )  
@@ -208,6 +215,7 @@ class CFTOC(object):
         model.x = pyo.Var(model.xIDX, model.tIDX)
         model.u = pyo.Var(model.uIDX, model.tIDX)
         model.lambVar = pyo.Var(model.lIDX)
+        model.bVar = pyo.Var(model.tIDX, within = pyo.Binary)
         
     	# =====================================================================
         # ===========================  CONSTRAINTS  ===========================
@@ -235,6 +243,12 @@ class CFTOC(object):
                                                   rule=lambda model,i,t: model.x[i,t]<=x_Q[i]+max_dev)
         model.corridor_constraints2 = pyo.Constraint(range(3,6), model.tIDX, 
                                                   rule=lambda model,i,t: model.x[i,t]>=x_Q[i]-max_dev)
+
+        # Big M Constraints to Enable Optimal Time (force bVar to 0 close to goal and 1 otherwise)
+        model.Big_M_constraints1 = pyo.Constraint(range(3,6), model.tIDX, 
+                                                  rule=lambda model,i,t: x_G[i] - model.x[i,t] - model.bVar[t] * big_M <= slack_goal)
+        model.Big_M_constraints2 = pyo.Constraint(range(3,6), model.tIDX, 
+                                                  rule=lambda model,i,t: - x_G[i] + model.x[i,t] - model.bVar[t] * big_M <= slack_goal)
         
         # SS Constraints 1 - Positive lambda
         model.lambVar_positive = pyo.Constraint(model.lIDX, 
@@ -260,13 +274,9 @@ class CFTOC(object):
             costTerminal = 0.0
             
             for t in model.tIDX:
-                # SIGMOID COST ON STATES
-                # h_k = ||x_k - x_G||^2 / sqrt(||x_k - x_G||^4 + 1)
-                x_G = np.array([0, 0, 0, 0.8, 0, 0.8]) # GOAL
-                if t < model.N-1:
-                    #costX += (model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)/(model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2)**2+1
-                    #costX += model.x[i,t]**2 - 2 * x_G[i] * model.x[i,t] + x_G[i]**2               
-                    costX += ((model.x[3,t] - x_G[3])**2 + (model.x[4,t] - x_G[4])**2 + (model.x[5,t] - x_G[5])**2) / ((model.x[3,t] - x_G[3])**2 + (model.x[4,t] - x_G[4])**2 + (model.x[5,t] - x_G[5])**2 + 1)
+                # BINARY COST FOR OPTIMAL TIME
+                # h_k = 1 if (-slack_goal < x_G - x_i < slack_goal); 0 else
+                costX += 1 * model.bVar[t]
                 
                 for i in model.uIDX:
                     for j in model.uIDX:
@@ -296,7 +306,7 @@ class CFTOC(object):
         # =====================================================================
         
         # Initialize MOSEK solver and solve optimization problem
-        solver = pyo.SolverFactory('ipopt')
+        solver = pyo.SolverFactory('mosek')
         results = solver.solve(model)
         
         # Check if solver found a feasible, bounded, optimal solution

@@ -118,12 +118,13 @@ def main():
 	# =========================================================================
     
 	# Initialize LMPC objects
-    N_LMPC = 7 # horizon length
+    N_LMPC = 9 # horizon length
     CFTOC_LMPC = CFTOC(N_LMPC, dynamics, costs) # CFTOC solved by LMPC
     lmpc = LMPC(CFTOC_LMPC, N_LMPC, MPC_Time+1) # Initialize the LMPC
     lmpc.addTrajectory(xcl_feasible, ucl_feasible) # Add feasible trajectory to the safe set
-	
-    totalIterations = 4 # Number of iterations to perform
+    lmpc.goal_pt = trajectory.get_goalpoint() # Import coordinates of goal
+
+    totalIterations = 10 # Number of iterations to perform
 
     print("Starting LMPC...")
     
@@ -140,13 +141,12 @@ def main():
             xt = xcl[lmpc.t_index] 
 
             # Check if any predicted states are over the finish line
-            preview = trajectory.get_reftraj(lmpc.t_index, N_LMPC)
             lmpc.closest_pt_traj = trajectory.get_closestpoint(xt)
             if (lmpc.xPred != []):
                 lmpc.pred_over_finish = trajectory.crossedFinish(lmpc.xPred, lmpc.t_index)
 
 			# Solve CFTOC
-            lmpc.solve(xt, ut, preview) 
+            lmpc.solve(xt, ut) 
 
 			# Read and apply optimal input to the system
             ut = lmpc.uPred[:,0]
@@ -170,13 +170,14 @@ def main():
 
 		# Add trajectory to update the safe set and value function
         lmpc.addTrajectory(xcl, ucl)
-        
+
+    print("Lap Times: ",lmpc.LapTime)   
 	# Save the lmpc object
     #filename = 'lmpc_object.pkl'
     #filehandler = open(filename, 'wb')
     #pickle.dump(lmpc, filehandler)
    
-    plot_trajectories(x_array)
+    #plot_trajectories(x_array)
     
     #print("Completion times: ", completion_time)
 

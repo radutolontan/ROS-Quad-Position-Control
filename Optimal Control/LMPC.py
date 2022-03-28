@@ -29,12 +29,16 @@ class LMPC(object):
         self.p = 4 # build SS subset from last 'p' iterations only
         self.n = 40 # return 'n' closest terms (WARNING: SS_future_n returns 'n' states for each 'p' iteration)
         self.delta = 0.2 # used to define state constraints (as max deviation delta)
+        self.delta_goal = 0.05 # used to define nearness to goal required for optimal time cost
         
         # Vector which holds 1s for predicted states (xPred) over the finish line and 0s otherwise
         self.pred_over_finish = 0 
 
         # Array which holds closest point on reference trajectory to current state
         self.closest_pt_traj = 0
+
+        # Array which contains the x,y,z coordinates of the goal (will be imported as appropriate to the trajectory)
+        self.goal_pt = 0
 
     def addTrajectory(self, x, u):
 
@@ -145,13 +149,13 @@ class LMPC(object):
 
         return SS_subset, Qfun_subset
 
-    def solve(self, xt, ut, preview):
+    def solve(self, xt, ut):
 			
         # Build local SS subset used for LMPC 
         SS_selected, Qfun_selected = self.SS_local_N(xt)
         
 		# Solve the CFTOC 
-        self.cftoc.solve_LMPC(xt, ut, self.delta, SS_selected, Qfun_selected, preview, self.closest_pt_traj)
+        self.cftoc.solve_LMPC(xt, ut, self.delta, self.delta_goal, SS_selected, Qfun_selected, self.closest_pt_traj, self.goal_pt)
 
 		# Update predicted trajectory
         self.xPred= self.cftoc.x_pred
