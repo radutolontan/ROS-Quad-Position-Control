@@ -90,7 +90,6 @@ class Trajectory(object):
 
         return np.reshape(goal_coordinates,(6,1)) 
  
-
     def get_reftraj(self, t_index, horizon, setpoint=0):
         """   (MPC Position Controller )
         This method returns the reference trajectory preview for 'horizon' timesteps given:
