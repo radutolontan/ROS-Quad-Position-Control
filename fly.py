@@ -9,11 +9,11 @@ from nav_msgs.msg import Odometry
 # Import controllers and trajectories
 import sys
 sys.path.append('Optimal Control')
-#sys.path.append('Classic Control')
+sys.path.append('Classic Control')
 sys.path.append('Trajectory')
 from CFTOC_pyomo import CFTOC
 from LMPC import LMPC
-#from PID import PID
+from PID import PD
 from Trajectory import Trajectory
 
 # Import Python packages
@@ -55,19 +55,13 @@ class cost_matrices(object):
         self.Q = np.diag([3., 3., 6., 4., 4., 8.])
         # Jinput = (u_k).T * R * (u_k) (stage cost on inputs)
         # [ORIGINAL] self.R = 2 * np.diag(np.array([1,1,0.0002]))
-        self.R = 2 * np.diag(np.array([1,1,0.05]))
+        self.R = 2 * np.diag(np.array([1,1,0.03]))
         # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref) (terminal cost on states)
         self.Qf = scipy.linalg.solve_discrete_are(dynamics.A_k, dynamics.B_k, 
                                                   self.Q, self.R)
         # Jdinput = (u_k+1 - u_k).T * dR * (u_k+1 - u_k) (stage cost on input change)
-        # [ORIGINAL] self.dR = 0.2 * np.diag(np.array([16,16,2])) # 0.2
-        self.dR = 0.5 * np.diag(np.array([5,5,2]))
-
-# Define odometry messages and callbacks
-odom_stored_msg = Odometry()
-def odom_callback(msg):
-	global odom_stored_msg
-	odom_stored_msg = copy.deepcopy(msg)
+        # [ORIGINAL] self.dR = 0.2 * np.diag(np.array([16,16,2]))
+        self.dR = 0.5 * np.diag(np.array([5,5,0.05]))
 
 # Define linear dynamics
 dynamics = point_mass_dynamics()
@@ -75,32 +69,41 @@ dynamics = point_mass_dynamics()
 # Define optimal control costs
 costs = cost_matrices(dynamics)
 
+# Define odometry messages, callback functions and publisher
+pub = []; rate = []
+odom_stored_msg = Odometry()
+def odom_callback(msg):
+	global odom_stored_msg
+	odom_stored_msg = copy.deepcopy(msg)
+
 # Select desired reference trajectory for main navigation (0 - circular)(1 - setPoint)
 trajectory = Trajectory(dynamics.freq, 0)
 
 # Initial conditions on inputs are set to allow smooth input changes
 F_vec = np.array([0,0,dynamics.m*dynamics.g]).T
 
+# Initialize Landing Sight
+L_point = []
+
 # Initialize MPC object
 N_CFTOC = 7
 CFTOC_MPC  = CFTOC(N_CFTOC, dynamics, costs)
+
+# Initialize PID object
+PD_controller = PD(dynamics)
 
 # initialize flight mode
 flight_mode = 0
 
 def get_flight_mode():
     global flight_mode
-    flight_mode = int(input("1 (T/O) ; 2 (Train) ; 3 (LMPC Navi.) ; 4 (Land) ... "))
+    flight_mode = int(input("1 (T/O) ; 2 (Train) ; 3 (LMPC Navi.) ; 4 (Land) ; 5 (Exit) ... "))
 
 def send_command():
-    global dynamics, F_vec
-
-    # Declare publisher
-    pub = rospy.Publisher('/white_falcon/thrust_force', TwistStamped, queue_size=10)
-    rate = rospy.Rate(dynamics.freq) # operating frequency set inside dynamics
+    global dynamics, F_vec, pub, rate
 
     # Vertical force offset
-    v_offset = 5.25 # (7.25 for hardware with cables)
+    v_offset = 4.7# (7.25 for hardware with cables)
 
     # Send thrust command to quadcopter
     thrust = TwistStamped()
@@ -110,12 +113,15 @@ def send_command():
     thrust.twist.angular.x = 0.0
     thrust.twist.angular.y = 0.0
     thrust.twist.angular.z = 0.0 
-    rospy.loginfo(thrust)
+    #rospy.loginfo(thrust)
     pub.publish(thrust)
     rate.sleep() 
 
 def hold_position():
-    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec
+    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, flight_mode
+
+    # Copy initial flight mode
+    initial_mode = copy.deepcopy(flight_mode)
 
     # Hold current position
     hold_loc = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
@@ -125,7 +131,7 @@ def hold_position():
     hold_traj = Trajectory(dynamics.freq, 1)
     hold_time = 0
 
-    while not rospy.is_shutdown():
+    while (flight_mode == initial_mode) & (not rospy.is_shutdown()):
         # Read quadcopter state
         xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
@@ -140,16 +146,51 @@ def hold_position():
         F_vec = CFTOC_MPC.u_pred[:,0]
         send_command()
 
-def takeoff():
-    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec
+def takeoff_PD():
+    global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller
     
     # Initialize input and time
-    T_O_point = np.array([0, 0, 0, 0, 0, 0.8])
-    TO_Time = 0
-    ut = np.array([0,0,dynamics.m*dynamics.g]).T
+    T_O_point = np.array([0, 0, 0, 0, 0, 1])
 
     # Define takeoff trajectory (type: set point)
     takeoff_traj = Trajectory(dynamics.freq, 1)
+
+    # Store takeoff position as home for landing purposes
+    L_point = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+
+    while not rospy.is_shutdown():
+        # Read quadcopter state
+        xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                       odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+
+        # Compute trajectory preview
+        preview = takeoff_traj.get_reftraj(0, 0, T_O_point[3:6])
+        # Solve MPC CFTOC problem
+        PD_controller.solve_PD(xt, np.reshape(preview,6)) 
+
+        # Read first optimal input and send to drone
+        F_vec = PD_controller.F_command
+        send_command()
+
+        # End manouver when desired point is captured
+        if (la.norm(xt - T_O_point) <= 0.05):
+            #F = ut
+            break
+
+def takeoff():
+    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point
+    
+    # Initialize input and time
+    T_O_point = np.array([0, 0, 0, 0, 0, 1])
+    TO_Time = 0
+
+    # Define takeoff trajectory (type: set point)
+    takeoff_traj = Trajectory(dynamics.freq, 1)
+
+    # Store takeoff position as home for landing purposes
+    L_point = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
 
     while not rospy.is_shutdown():
         # Read quadcopter state
@@ -172,13 +213,76 @@ def takeoff():
         # End manouver when desired point is captured
         if (la.norm(xt - T_O_point) <= 0.02):
             #F = ut
+            CFTOC_MPC.xPred = []
+            CFTOC_MPC.uPred = []
+            break
+
+def land_PD():
+    global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller
+
+    # Define takeoff trajectory (type: set point)
+    landing_traj = Trajectory(dynamics.freq, 1)
+
+    while not rospy.is_shutdown():
+        # Read quadcopter state
+        xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                       odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+
+        # Compute trajectory preview
+        preview = landing_traj.get_reftraj(0, 0, L_point[3:6])
+        # Solve MPC CFTOC problem
+        PD_controller.solve_PD(xt, np.reshape(preview,6)) 
+
+        # Read first optimal input and send to drone
+        F_vec = PD_controller.F_command
+        send_command()
+
+        # Turn off motors when close to home
+        if (la.norm(xt - L_point) <= 0.05):
+            F_vec = np.zeros(3)
+            send_command()
+            break
+
+def land():
+    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point
+    
+    # Initialize input and time
+    L_Time = 0
+
+    # Define takeoff trajectory (type: set point)
+    landing_traj = Trajectory(dynamics.freq, 1)
+
+    while not rospy.is_shutdown():
+        # Read quadcopter state
+        xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                       odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+
+        # Compute trajectory preview
+        preview = landing_traj.get_reftraj(L_Time, CFTOC_MPC.N, L_point[3:6])
+
+        # Solve MPC CFTOC problem
+        CFTOC_MPC.solve_MPC(xt, F_vec, preview) 
+
+        # Read first optimal input and send to drone
+        F_vec = CFTOC_MPC.u_pred[:,0]
+        send_command()
+
+        # Increase counter 
+        L_Time += 1
+
+        # Turn off motors when close to home
+        if (la.norm(xt - L_point) <= 0.05):
+            F_vec = np.zeros(3)
+            send_command()
             break
 
 def main():
-    global flight_mode, odom_stored_msg
+    global flight_mode, odom_stored_msg, pub, rate, CFTOC_MPC
 
     # Setup odometry subscriber
     odom_sub = rospy.Subscriber("/white_falcon/odometry/mocap", Odometry, odom_callback)
+    pub = rospy.Publisher('/white_falcon/thrust_force', TwistStamped, queue_size=10)
+    rate = rospy.Rate(dynamics.freq) # operating frequency set inside dynamics
     
     # Prompt user to initiate flight
     get_flight_mode()
@@ -186,17 +290,14 @@ def main():
     for jj in range(0,4):
 
         if (int(flight_mode) == 1):
-            # Take off
-            takeoff()
-            print("TAKEOFF COMPLETED. Starting Hold...")
-
-            # Create Multithreaded Hold Process
-            hold_thread = threading.Thread(target=hold_position)
-            change_mode_thread = threading.Thread(target=get_flight_mode)
-            hold_thread.start()
-            change_mode_thread.start()
-            change_mode_thread.join()
-            
+            #========= TAKE OFF =========
+            print("TAKEOFF INITIATED...")
+            try:
+                takeoff()
+                print("TAKEOFF SUCCESSFULL! Starting Hold...")
+            except:
+                print("TAKEOFF ABORTED. LANDING...")
+                land()
 
         #elif (int(flight_mode) == 2):
             # TO DO TRAINING
@@ -204,9 +305,25 @@ def main():
         #elif (int(flight_mode) == 3):
             # TO DO LMPC NAVIGATION
 
-        #else:
-            # TO DO LAND        
+        elif (int(flight_mode) == 4):
+            #========= LANDING =========
+            land()
+            print("LANDING SUCCESSFULL!")
+            break 
+
+        else:
+            #========== EXIT ===========  
+            break   
     
+        # Create Multithreaded Hold Process
+        hold_thread = threading.Thread(target=hold_position)
+        change_mode_thread = threading.Thread(target=get_flight_mode)
+        hold_thread.start()
+        change_mode_thread.start()
+        change_mode_thread.join()
+        CFTOC_MPC.xPred = []
+        CFTOC_MPC.uPred = []
+            
 # =============================================================================
 # ==============================    PLOTTING     ==============================
 # =============================================================================
@@ -276,7 +393,7 @@ if __name__ == '__main__':
     try:
         rospy.init_node('offboard_node')
         main()  
-        plot_trajectories()
+        #plot_trajectories()
         
     except rospy.ROSInterruptException:
         pass    
