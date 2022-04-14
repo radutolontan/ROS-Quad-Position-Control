@@ -81,6 +81,8 @@ trajectory = Trajectory(dynamics.freq, 0)
 
 # Initial conditions on inputs are set to allow smooth input changes
 F_vec = np.array([0,0,dynamics.m*dynamics.g]).T
+F_z_offset_MPC = 4.7
+F_z_offset_PID = 1.2
 
 # Initialize Landing Sight
 L_point = []
@@ -92,6 +94,14 @@ CFTOC_MPC  = CFTOC(N_CFTOC, dynamics, costs)
 # Initialize PID object
 PD_controller = PD(dynamics)
 
+# Initialize LMPC objects
+N_LMPC = 9 # horizon length
+CFTOC_LMPC = CFTOC(N_LMPC, dynamics, costs) # CFTOC solved by LMPC
+
+# Intiate time storage for PID and MPC
+PID_Time = 0; MPC_Time = 0
+xcl_MPC = []; ucl_MPC = []; xcl_PID = [] ; ucl_PID = []
+
 # initialize flight mode
 flight_mode = 0
 
@@ -99,11 +109,8 @@ def get_flight_mode():
     global flight_mode
     flight_mode = int(input("1 (T/O) ; 2 (Train) ; 3 (LMPC Navi.) ; 4 (Land) ; 5 (Exit) ... "))
 
-def send_command():
+def send_command(v_offset):
     global dynamics, F_vec, pub, rate
-
-    # Vertical force offset
-    v_offset = 4.7# (7.25 for hardware with cables)
 
     # Send thrust command to quadcopter
     thrust = TwistStamped()
@@ -118,7 +125,7 @@ def send_command():
     rate.sleep() 
 
 def hold_position():
-    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, flight_mode
+    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, flight_mode, F_z_offset_MPC
 
     # Copy initial flight mode
     initial_mode = copy.deepcopy(flight_mode)
@@ -126,7 +133,11 @@ def hold_position():
     # Hold current position
     hold_loc = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
                          odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
-     
+
+    ########################################
+    # hold_loc = np.array([0, 0, 0, 0.8, 0, 1])
+    ########################################
+
     # Define hold trajectory (type: set point)
     hold_traj = Trajectory(dynamics.freq, 1)
     hold_time = 0
@@ -144,13 +155,13 @@ def hold_position():
 
         # Read first optimal input and send to drone
         F_vec = CFTOC_MPC.u_pred[:,0]
-        send_command()
+        send_command(F_z_offset_MPC)
 
 def takeoff_PD():
-    global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller
+    global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller, F_z_offset_PID
     
     # Initialize input and time
-    T_O_point = np.array([0, 0, 0, 0, 0, 1])
+    T_O_point = np.array([0, 0, 0, 0.8, 0, 1])
 
     # Define takeoff trajectory (type: set point)
     takeoff_traj = Trajectory(dynamics.freq, 1)
@@ -171,7 +182,7 @@ def takeoff_PD():
 
         # Read first optimal input and send to drone
         F_vec = PD_controller.F_command
-        send_command()
+        send_command(F_z_offset_PID)
 
         # End manouver when desired point is captured
         if (la.norm(xt - T_O_point) <= 0.05):
@@ -179,10 +190,10 @@ def takeoff_PD():
             break
 
 def takeoff():
-    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point
+    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point, F_z_offset_MPC
     
     # Initialize input and time
-    T_O_point = np.array([0, 0, 0, 0, 0, 1])
+    T_O_point = np.array([0, 0, 0, 0.8, 0, 1])
     TO_Time = 0
 
     # Define takeoff trajectory (type: set point)
@@ -205,7 +216,7 @@ def takeoff():
 
         # Read first optimal input and send to drone
         F_vec = CFTOC_MPC.u_pred[:,0]
-        send_command()
+        send_command(F_z_offset_MPC)
 
         # Increase counter 
         TO_Time += 1
@@ -218,7 +229,7 @@ def takeoff():
             break
 
 def land_PD():
-    global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller
+    global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller, F_z_offset_PID
 
     # Define takeoff trajectory (type: set point)
     landing_traj = Trajectory(dynamics.freq, 1)
@@ -235,16 +246,16 @@ def land_PD():
 
         # Read first optimal input and send to drone
         F_vec = PD_controller.F_command
-        send_command()
+        send_command(F_z_offset_PID)
 
         # Turn off motors when close to home
-        if (la.norm(xt - L_point) <= 0.05):
+        if (la.norm(xt - L_point) <= 0.12):
             F_vec = np.zeros(3)
-            send_command()
+            send_command(0)
             break
 
 def land():
-    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point
+    global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point, F_z_offset_MPC
     
     # Initialize input and time
     L_Time = 0
@@ -265,7 +276,7 @@ def land():
 
         # Read first optimal input and send to drone
         F_vec = CFTOC_MPC.u_pred[:,0]
-        send_command()
+        send_command(F_z_offset_MPC)
 
         # Increase counter 
         L_Time += 1
@@ -273,11 +284,129 @@ def land():
         # Turn off motors when close to home
         if (la.norm(xt - L_point) <= 0.05):
             F_vec = np.zeros(3)
-            send_command()
+            send_command(0)
             break
+
+def train():
+    global dynamics, costs
+    global CFTOC_MPC, PD_controller, F_z_offset_MPC, F_z_offset_PID
+    global odom_stored_msg, F_vec, trajectory
+    global xcl_MPC, ucl_MPC, xcl_PID, ucl_PID
+    global PID_Time, MPC_Time
+
+    # ========================================================
+    # ===================== TRAIN w. MPC =====================
+    # ========================================================
+    
+    while True:
+        # Read system state
+        xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                       odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+        xcl_MPC.append(np.reshape(xt,(6,1)))
+
+        # Compute trajectory preview
+        preview = trajectory.get_reftraj(MPC_Time, CFTOC_MPC.N)
+
+        # Solve MPC CFTOC problem
+        CFTOC_MPC.solve_MPC(xt, F_vec, preview) 
+        
+		# Read first optimal input and send to drone
+        F_vec = CFTOC_MPC.u_pred[:,0]
+        ucl_MPC.append(np.reshape(F_vec,(3,1)))
+        send_command(F_z_offset_MPC)
+        
+        MPC_Time += 1 
+        # Stop running when finish line is crossed from below
+        if trajectory.crossedFinish(np.reshape((xcl_MPC)[-1],(6,1)), MPC_Time) == True:
+            break
+
+    print("MPC Training Complete")
+
+    # ========================================================
+    # ===================== TRAIN w. PID =====================
+    # ========================================================
+
+    while True:
+        # Read system state
+        xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                       odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+        xcl_PID.append(np.reshape(xt,(6,1)))
+
+        # Compute trajectory preview
+        preview = trajectory.get_reftraj(PID_Time, 0)
+
+        # Solve MPC CFTOC problem
+        PD_controller.solve_PD(xt, np.reshape(preview,6)) 
+        
+		# Read first optimal input and send to drone
+        F_vec = PD_controller.F_command
+        send_command(F_z_offset_PID)
+        ucl_PID.append(np.reshape(F_vec,(3,1)))
+        
+        PID_Time += 1 
+        # Stop running when finish line is crossed from below
+        if trajectory.crossedFinish(np.reshape((xcl_PID)[-1],(6,1)), PID_Time) == True:
+            PID_Time += 1
+            break
+
+    print("PID Training Complete")
+
+def navigate_LMPC():
+    global CFTOC_LMPC, trajectory
+    global xcl_MPC, ucl_MPC, xcl_PID, ucl_PID
+    global PID_Time, MPC_Time
+
+    lmpc = LMPC(CFTOC_LMPC, CFTOC_LMPC.N, PID_Time) # Initialize the LMPC
+    lmpc.addTrajectory(xcl_PID, ucl_PID) # Add feasible trajectory to the safe set
+    lmpc.goal_pt = trajectory.get_goalpoint() # Import coordinates of goal
+
+    totalIterations = 4 # Number of iterations to perform
+
+    print("Starting LMPC...")
+    
+    # Run LMPC
+    for it in range (0,totalIterations):
+        # Set initial conditions to the final states from the previous iteration
+        xcl = [lmpc.SS[it][:,-1]] 
+        ucl =[]
+        ut = lmpc.uSS[it][:,-1]
+        
+		# Solve CFTOC for LMPC
+        while True:
+			# Read measurement
+            xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+                           odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+      
+            # Check if any predicted states are over the finish line
+            lmpc.closest_pt_traj = trajectory.get_closestpoint(xt)
+            if (lmpc.xPred != []):
+                lmpc.pred_over_finish = trajectory.crossedFinish(lmpc.xPred, lmpc.t_index)
+
+			# Solve CFTOC
+            lmpc.solve(xt, ut) 
+
+			# Read and apply optimal input to the system
+            ut = lmpc.uPred[:,0]
+            ucl.append(ut)
+            xcl.append(xt)
+
+            # Add new state to past iteration SS to enable loop-around 
+            lmpc.addtoPrevSS(xcl[-1])
+            lmpc.t_index += 1
+                
+            # Quit when finish line is reached
+            if trajectory.crossedFinish(np.reshape(xcl[-1],(6,1)), lmpc.t_index) == True:
+                del xcl[0]
+                break
+
+        print("LMPC Lap #", it+1 , " complete!")
+
+		# Add trajectory to update the safe set and value function
+        lmpc.addTrajectory(xcl, ucl)
 
 def main():
     global flight_mode, odom_stored_msg, pub, rate, CFTOC_MPC
+    global xcl_PID
 
     # Setup odometry subscriber
     odom_sub = rospy.Subscriber("/white_falcon/odometry/mocap", Odometry, odom_callback)
@@ -293,21 +422,35 @@ def main():
             #========= TAKE OFF =========
             print("TAKEOFF INITIATED...")
             try:
-                takeoff()
+                takeoff_PD()
                 print("TAKEOFF SUCCESSFULL! Starting Hold...")
             except:
                 print("TAKEOFF ABORTED. LANDING...")
-                land()
+                land_PD()
 
-        #elif (int(flight_mode) == 2):
-            # TO DO TRAINING
+        elif (int(flight_mode) == 2):
+            #========== TRAIN ===========            
+            print("TRAINING INITIATED...")
+            try:
+                train()
+                print("TRAINING SUCCESSFULL! Starting Hold...")
+            except:
+                print("TRAINING ABORTED. LANDING...")
+                land_PD()
 
-        #elif (int(flight_mode) == 3):
-            # TO DO LMPC NAVIGATION
+        elif (int(flight_mode) == 3):
+            #=========== LMPC ===========            
+            print("LMPC NAVIGATION INITIATED...")
+            try:
+                navigate_LMPC()
+                print("LMPC SUCCESSFULL! Starting Hold...")
+            except:
+                print("LMPC ABORTED. LANDING...")
+                land_PD()
 
         elif (int(flight_mode) == 4):
             #========= LANDING =========
-            land()
+            land_PD()
             print("LANDING SUCCESSFULL!")
             break 
 
@@ -323,15 +466,16 @@ def main():
         change_mode_thread.join()
         CFTOC_MPC.xPred = []
         CFTOC_MPC.uPred = []
+
+    xcl_PID = np.array(xcl_PID)
+    print("SHAPE: ", xcl_PID[:,:,0].shape)
+    plot_trajectories(xcl_PID[:,:,0].T)
             
 # =============================================================================
 # ==============================    PLOTTING     ==============================
 # =============================================================================
 
-def plot_trajectories():
-    global x
-    # Remove first column used for stacking purposes
-    x = x[:,1:]
+def plot_trajectories(x):
     
     # 2D X-Y plot
     fig = plt.figure(1, figsize=(18,6))

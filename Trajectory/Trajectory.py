@@ -19,7 +19,7 @@ class Trajectory(object):
          # k - time steps; freq - frequncy (Hz)
         r = 0.7
         omega = 1.2
-        cruise_height = 0.8
+        cruise_height = 1.5
         # Create storage and set Z- location to 0
         x = np.zeros((6,int(np.size(k))))
         

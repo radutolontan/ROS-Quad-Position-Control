@@ -10,10 +10,10 @@ import itertools
 
 class LMPC(object):
 
-    def __init__(self, cftoc, N_LMPC, MPC_LapTime):
+    def __init__(self, cftoc, N_LMPC, PID_Laptime):
 		# Initialization
         self.t_index = 0
-        self.LapTime = [MPC_LapTime]
+        self.LapTime = [PID_Laptime]
         self.cftoc = cftoc
         self.SS    = []
         self.uSS   = []
