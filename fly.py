@@ -305,7 +305,7 @@ def train():
         xcl_MPC.append(np.reshape(xt,(6,1)))
 
         # Compute trajectory preview
-        preview = trajectory.get_reftraj(MPC_Time, CFTOC_MPC.N)
+        preview = trajectory.get_reftraj(MPC_Time, CFTOC_MPC.N)[0:6] # No need to carry ref. acceleration [6:9]
 
         # Solve MPC CFTOC problem
         CFTOC_MPC.solve_MPC(xt, F_vec, preview) 

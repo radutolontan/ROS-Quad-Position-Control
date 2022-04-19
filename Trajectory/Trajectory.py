@@ -12,9 +12,9 @@ class Trajectory(object):
         self.traj_type = traj_type 
         self.freq = freq
         if (self.traj_type==2):
-            self.custom_traj = np.load("para6.npy").T
+            self.custom_traj = np.load("para9.npy").T
             # Select non-overlapping section
-            self.custom_traj = self.custom_traj[:,0:1072]
+            self.custom_traj = self.custom_traj[:,0:1715] # para8 - 1715 # para7 - 1220
             # Double the trajectory for accurate predictions close to the finish line
             self.custom_traj = np.hstack((self.custom_traj,self.custom_traj[:,20:]))
 

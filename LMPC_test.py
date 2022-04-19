@@ -10,9 +10,11 @@ import pickle
 import time as tm
 
 sys.path.append('Optimal Control')
+sys.path.append('Classic Control')
 sys.path.append('Trajectory')
 
 from CFTOC_pyomo import CFTOC
+from PID import PD
 from LMPC import LMPC
 from Trajectory import Trajectory
 
@@ -71,7 +73,50 @@ def main():
 	# Initialize MPC object
     N_CFTOC = 7
     CFTOC_MPC  = CFTOC(N_CFTOC, dynamics, costs)
+
+    # Initialize PID object
+    PD_controller = PD(dynamics)
     
+    # =========================================================================
+	# ===============  CONSTRUCT FEASIBLE SOLUTION USING PID  =================
+	# =========================================================================
+    print("Starting PID...")
+    xcl_PID = [x0]
+    ucl_PID = []
+    xt           = x0
+    ut           = u0
+    PID_Time   = 0
+
+    while True:
+        # Read system state
+        xt = xcl_PID[PID_Time]
+
+        # Compute trajectory preview
+        preview = trajectory.get_reftraj(PID_Time, 1)
+
+        # Solve PID problem
+        PD_controller.solve_PD(xt, np.reshape(preview,9)) 
+
+        # Read PID input
+        ut = PD_controller.F_command
+        ucl_PID.append(ut)
+
+        # Apply input to system
+        xcl_PID.append(CFTOC_MPC.model(xcl_PID[PID_Time], ut))
+        PID_Time += 1
+
+        # Stop running when finish line is crossed 
+        if trajectory.crossedFinish(np.reshape((xcl_PID)[-1],(6,1)), PID_Time) == True:
+            break
+
+        print("PID #", PID_Time-1)
+
+    # PLOT PID RESULTS
+    x_array = np.array(xcl_PID)
+    plot_trajectories(x_array)
+
+    print("PID Terminated!")
+
 	# =========================================================================
 	# ===============  CONSTRUCT FEASIBLE SOLUTION USING MPC  =================
 	# =========================================================================
@@ -89,7 +134,7 @@ def main():
         xt = xcl_feasible[MPC_Time] 
         
         # Compute trajectory preview
-        preview = trajectory.get_reftraj(MPC_Time, N_CFTOC)
+        preview = trajectory.get_reftraj(MPC_Time, N_CFTOC)[0:6] # No need for acceleration here [6:9]
 
         # Solve MPC CFTOC problem
         CFTOC_MPC.solve_MPC(xt, ut, preview) 
@@ -112,6 +157,7 @@ def main():
         if trajectory.crossedFinish(np.reshape((xcl_feasible)[-1],(6,1)), MPC_Time) == True:
             break
     
+    # PLOT MPC RESULTS
     x_array = np.array(xcl_feasible)
     plot_trajectories(x_array)
     

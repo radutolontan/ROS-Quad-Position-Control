@@ -8,13 +8,11 @@ class PD():
         self.kv = np.array([3, 3, 6])
         self.e3 = np.array([0,0,1])  
 
-        # Hardcode reference acceleration to be 0 for PID control purposes
-        self.ad = np.zeros(3)
-
     def solve_PD(self, xt, preview):
         # Compute position and velocity errors
-        err_x = xt[3:] -preview[3:]
+        err_x = xt[3:6] -preview[3:6]
         err_v = xt[0:3]-preview[0:3]
+        self.ad = preview[6:9]
 
         # Compute feedback control input
         Fff = self.m*(self.g*self.e3 + self.ad)

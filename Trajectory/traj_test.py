@@ -4,7 +4,7 @@ import sys
 import os
 sys.path.append('Trajectory')
 
-traj = np.load("para6.npy").T
+traj = np.load("para8.npy").T
 
 print("Traj size 0 - ",np.size(traj,0))
 print("Traj size 1 - ",np.size(traj,1))
@@ -62,7 +62,7 @@ def plot_trajectories(x):
     plt.title('Z vs. T')
     plt.show()    
 
-traj = traj[:,0:1072]
+traj = traj[:,0:1220]
 
 traj = np.hstack((traj,traj[:,20:]))
 
