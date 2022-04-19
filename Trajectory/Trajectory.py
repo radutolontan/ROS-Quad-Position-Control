@@ -3,13 +3,20 @@ This class is used to create reference trajectories for all types of position co
 """
 import numpy as np
 import numpy.linalg as la
+import sys
 
 class Trajectory(object):
 
     def __init__(self, freq, traj_type):
-        # Trajectory types: 0 - circular; 1 - setpoint
+        # Trajectory types: 0 - circular; 1 - setpoint; 2 - custom trajectory
         self.traj_type = traj_type 
         self.freq = freq
+        if (self.traj_type==2):
+            self.custom_traj = np.load("para6.npy").T
+            # Select non-overlapping section
+            self.custom_traj = self.custom_traj[:,0:1072]
+            # Double the trajectory for accurate predictions close to the finish line
+            self.custom_traj = np.hstack((self.custom_traj,self.custom_traj[:,20:]))
 
     # ====================================================================================
     # ============================== TYPES OF TRAJECTORIES ===============================
@@ -35,7 +42,7 @@ class Trajectory(object):
         return x
 
     def set_point(self, k, setpoint):
-        # k - time steps; freq - frequncy (Hz)
+        # k - time steps
         # Create storage for both velocities and locations
         # Set velocities to 0
         x = np.zeros((6,int(np.size(k))))
@@ -44,12 +51,22 @@ class Trajectory(object):
         x[4,:] = setpoint[1] * np.ones(int(np.size(k)))
         x[5,:] = setpoint[2] * np.ones(int(np.size(k)))
 
+    def custom(self, k):
+        # k - time steps
+        x = self.custom_traj[:,k.astype(int)]
         return x
 
     # ====================================================================================
     # ============================== TRAJECTORY PROCESSING ===============================
     # ====================================================================================
     
+    def top_bot_line(self, a, b, x1, y1):
+        # Function takes in equation of line (y=a*x+b) and a point (x1,y1), and returns one if
+        # point is above line and 0 if it is below the line
+        ytemp = a*x1+b
+
+        return 0 if ytemp > y1 else 1
+
     def crossedFinish(self, states, t_index):
         """
         Method takes in a vector of states (so a matrix) and returns a T/F vector indicating which
@@ -67,14 +84,27 @@ class Trajectory(object):
         # Otherwise check to see if state in each column has passed the f_line
         else:
             for jj in range(states.shape[1]):
-                # Time index (t_index) is used to ensure the states at the beginning are not picked up
-                if all((states[1,jj]>0, states[4,jj] >= 0.0, t_index > 300)) == True:
-                    crossLinevec[jj] = 1
+
+                ############### CIRCULAR TRACK TERMINATION CONDITION ###############
+                if (self.traj_type == 0):
+                    # Time index (t_index) is used to ensure the states at the beginning are not picked up
+                    if all((states[1,jj] > 0.0, states[4,jj] >= 0.0, t_index > 300)) == True:
+                        crossLinevec[jj] = 1
+
+                ################# CUSTOM TRACK TERMINATION CONDITION ###############
+                else:
+                    # Line can only be crossed from Q3 into Q1
+                    if np.all((self.top_bot_line(-0.5,0  ,states[3,jj],states[4,jj]) == 1,
+                               self.top_bot_line(-0.5,0.1,states[3,jj],states[4,jj]) == 0,
+                               states[1,jj] > 0, # Positive y-velocity
+                               t_index > 300)) == True:
+                        crossLinevec[jj] = 1
+
             return crossLinevec
 
     def get_closestpoint(self, xt):
         # Import full trajectory
-        full_traj = self.get_reftraj(0,1000)
+        full_traj = self.get_reftraj(0,9000)
 
         # Reshape state into proper shape
         xt = np.reshape(xt,(6,1))
@@ -97,7 +127,7 @@ class Trajectory(object):
             - horizon: number of elements in finite horizon
 		""" 
         # Define next N time steps from current time index
-        time_steps = np.linspace(t_index, t_index+horizon, horizon+1) 
+        time_steps = np.linspace(t_index, t_index + horizon - 1, horizon) 
         
         # CIRCULAR TRAJECTORY
         if (self.traj_type == 0):
@@ -106,5 +136,8 @@ class Trajectory(object):
         # SETPOINT
         elif (self.traj_type == 1):
             ref = self.set_point(time_steps, setpoint)
-                
+
+        # SPECIAL TRAJECTORY
+        else:
+            ref = self.custom(time_steps)  
         return ref

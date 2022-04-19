@@ -59,11 +59,11 @@ def main():
     # Define optimal control costs
     costs = cost_matrices(dynamics)
 
-    # Select desired reference trajectory (0 - circular)(1 - setPoint)
-    trajectory = Trajectory(dynamics.freq, 0)
+    # Select desired reference trajectory (0 - circular)(1 - setPoint)(2 - customTrajectory)
+    trajectory = Trajectory(dynamics.freq, 2)
     	
 	# Initial Condition
-    x0 = np.array([0,0,0,0.8,0,0.8])
+    x0 = np.array([0,0,0,0,0,0.6])
 
     # Initial conditions on inputs are set to allow smooth input changes
     u0 = np.array([0,0,dynamics.m*dynamics.g]).T
@@ -104,6 +104,10 @@ def main():
         
         print("CFTOC #", MPC_Time-1)
         
+        # TROUBLESHOOT
+        if MPC_Time==1300:
+            plot_trajectories(np.array(xcl_feasible))
+
         # Stop running when finish line is crossed from below
         if trajectory.crossedFinish(np.reshape((xcl_feasible)[-1],(6,1)), MPC_Time) == True:
             break
