@@ -6,7 +6,7 @@ class PD():
         self.m = dynamics.m
         self.kp = np.array([4, 4, 8])
         self.kv = np.array([3, 3, 6])
-        self.e3 = np.array([0,0,1])  
+        self.e3 = np.array([0, 0, 1])  
 
     def solve_PD(self, xt, preview):
         # Compute position and velocity errors

@@ -62,7 +62,7 @@ def plot_trajectories(x):
     plt.title('Z vs. T')
     plt.show()    
 
-traj = traj[:,0:1220]
+traj = traj[:,0:]
 
 traj = np.hstack((traj,traj[:,20:]))
 

@@ -76,8 +76,8 @@ def odom_callback(msg):
 	global odom_stored_msg
 	odom_stored_msg = copy.deepcopy(msg)
 
-# Select desired reference trajectory for main navigation (0 - circular)(1 - setPoint)
-trajectory = Trajectory(dynamics.freq, 0)
+# Select desired reference trajectory for main navigation (0 - circular)(1 - setPoint)(2 - CUSTOM)
+trajectory = Trajectory(dynamics.freq, 2)
 
 # Initial conditions on inputs are set to allow smooth input changes
 F_vec = np.array([0,0,dynamics.m*dynamics.g]).T
@@ -148,7 +148,7 @@ def hold_position():
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
 
         # Compute trajectory preview
-        preview = hold_traj.get_reftraj(hold_time, CFTOC_MPC.N, hold_loc[3:6])
+        preview = hold_traj.get_reftraj(hold_time, CFTOC_MPC.N, hold_loc[3:6])[0:6] # No need for acceleration here [6:9]
 
         # Solve MPC CFTOC problem
         CFTOC_MPC.solve_MPC(xt, F_vec, preview) 
@@ -161,7 +161,7 @@ def takeoff_PD():
     global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller, F_z_offset_PID
     
     # Initialize input and time
-    T_O_point = np.array([0, 0, 0, 0.8, 0, 1])
+    T_O_point = np.array([0, 0, 0, 0, 0, 0.6])
 
     # Define takeoff trajectory (type: set point)
     takeoff_traj = Trajectory(dynamics.freq, 1)
@@ -176,9 +176,10 @@ def takeoff_PD():
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
 
         # Compute trajectory preview
-        preview = takeoff_traj.get_reftraj(0, 0, T_O_point[3:6])
+        preview = takeoff_traj.get_reftraj(0, 1, T_O_point[3:6])
+
         # Solve MPC CFTOC problem
-        PD_controller.solve_PD(xt, np.reshape(preview,6)) 
+        PD_controller.solve_PD(xt, np.reshape(preview,9)) 
 
         # Read first optimal input and send to drone
         F_vec = PD_controller.F_command
@@ -193,7 +194,7 @@ def takeoff():
     global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point, F_z_offset_MPC
     
     # Initialize input and time
-    T_O_point = np.array([0, 0, 0, 0.8, 0, 1])
+    T_O_point = np.array([0, 0, 0, 0, 0, 0.6])
     TO_Time = 0
 
     # Define takeoff trajectory (type: set point)
@@ -209,7 +210,7 @@ def takeoff():
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
 
         # Compute trajectory preview
-        preview = takeoff_traj.get_reftraj(TO_Time, CFTOC_MPC.N, T_O_point[3:6])
+        preview = takeoff_traj.get_reftraj(TO_Time, CFTOC_MPC.N, T_O_point[3:6])[0:6] # No need for acceleration here [6:9]
 
         # Solve MPC CFTOC problem
         CFTOC_MPC.solve_MPC(xt, F_vec, preview) 
@@ -240,9 +241,9 @@ def land_PD():
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
 
         # Compute trajectory preview
-        preview = landing_traj.get_reftraj(0, 0, L_point[3:6])
+        preview = landing_traj.get_reftraj(0, 1, L_point[3:6])
         # Solve MPC CFTOC problem
-        PD_controller.solve_PD(xt, np.reshape(preview,6)) 
+        PD_controller.solve_PD(xt, np.reshape(preview,9)) 
 
         # Read first optimal input and send to drone
         F_vec = PD_controller.F_command
@@ -269,7 +270,7 @@ def land():
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
 
         # Compute trajectory preview
-        preview = landing_traj.get_reftraj(L_Time, CFTOC_MPC.N, L_point[3:6])
+        preview = landing_traj.get_reftraj(L_Time, CFTOC_MPC.N, L_point[3:6])[0:6] # No need for acceleration here [6:9]
 
         # Solve MPC CFTOC problem
         CFTOC_MPC.solve_MPC(xt, F_vec, preview) 
@@ -333,7 +334,7 @@ def train():
         xcl_PID.append(np.reshape(xt,(6,1)))
 
         # Compute trajectory preview
-        preview = trajectory.get_reftraj(PID_Time, 0)
+        preview = trajectory.get_reftraj(PID_Time, 1)
 
         # Solve MPC CFTOC problem
         PD_controller.solve_PD(xt, np.reshape(preview,6)) 

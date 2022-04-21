@@ -14,7 +14,7 @@ class Trajectory(object):
         if (self.traj_type==2):
             self.custom_traj = np.load("para9.npy").T
             # Select non-overlapping section
-            self.custom_traj = self.custom_traj[:,0:1715] # para8 - 1715 # para7 - 1220
+            self.custom_traj = self.custom_traj[:,0:1715] # para8 - 1715 # para7 - 1220 # para9 - 1715
             # Double the trajectory for accurate predictions close to the finish line
             self.custom_traj = np.hstack((self.custom_traj,self.custom_traj[:,20:]))
 
@@ -28,28 +28,34 @@ class Trajectory(object):
         omega = 1.2
         cruise_height = 1.5
         # Create storage and set Z- location to 0
-        x = np.zeros((6,int(np.size(k))))
+        x = np.zeros((9,int(np.size(k))))
         
         # X - and Y - velocities are parametrized
         x[0,:] = - (omega*r) * np.sin((k/self.freq) * omega) 
         x[1,:] =   (omega*r) * np.cos((k/self.freq) * omega)
-        # X - and Y - location are parametrized
+        # Z - velocity is zero
+        # X - and Y - locations are parametrized
         x[3,:] =  r * np.cos((k/self.freq) * omega) 
         x[4,:] =  r * np.sin((k/self.freq) * omega) 
         # Z - location is constant and equal to a height
         x[5,:] = cruise_height * np.ones(int(np.size(k)))
-
+        # X - and Y - accelerations are parametrized
+        x[6,:] = - ((omega**2)*r) * np.cos((k/self.freq) * omega) 
+        x[7,:] = - ((omega**2)*r) * np.sin((k/self.freq) * omega) 
+        # Z - acceleration is zero
         return x
 
     def set_point(self, k, setpoint):
         # k - time steps
         # Create storage for both velocities and locations
         # Set velocities to 0
-        x = np.zeros((6,int(np.size(k))))
+        x = np.zeros((9,int(np.size(k))))
+
         # Set X- setpoint, Y- setpoint and Z- setpoint
         x[3,:] = setpoint[0] * np.ones(int(np.size(k)))
         x[4,:] = setpoint[1] * np.ones(int(np.size(k)))
         x[5,:] = setpoint[2] * np.ones(int(np.size(k)))
+        return x
 
     def custom(self, k):
         # k - time steps
@@ -120,7 +126,7 @@ class Trajectory(object):
 
         return np.reshape(goal_coordinates,(6,1)) 
  
-    def get_reftraj(self, t_index, horizon, setpoint=0):
+    def get_reftraj(self, t_index, horizon, setpoint):
         """   (MPC Position Controller )
         This method returns the reference trajectory preview for 'horizon' timesteps given:
 			- t_index: the current time index
@@ -139,5 +145,6 @@ class Trajectory(object):
 
         # SPECIAL TRAJECTORY
         else:
-            ref = self.custom(time_steps)  
+            ref = self.custom(time_steps) 
+        
         return ref
