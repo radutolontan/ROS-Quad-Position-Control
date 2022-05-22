@@ -8,6 +8,7 @@ from nav_msgs.msg import Odometry
 
 # Import controllers and trajectories
 import sys
+
 sys.path.append('Optimal Control')
 sys.path.append('Classic Control')
 sys.path.append('Trajectory')
@@ -20,6 +21,7 @@ from Trajectory import Trajectory
 import numpy as np
 import numpy.linalg as la
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 import copy
 import threading
 import pickle
@@ -30,7 +32,7 @@ import pdb
 class point_mass_dynamics:
     def __init__(self):
         # System properties
-        self.m = 0.75  
+        self.m = 0.775
         self.g = 9.81
     
     	# Define continous-time dynamics
@@ -43,7 +45,7 @@ class point_mass_dynamics:
     
         # Define discrete-time dynamics and operating frequency
         # x_{k+1} = Ak* x_k + B_k*u_k + C_k
-        self.freq = 100
+        self.freq = 200
         self.A_k = (np.eye(6) + self.A/self.freq)
         self.B_k = self.B/self.freq
         self.C_k = self.C/self.freq
@@ -52,16 +54,22 @@ class cost_matrices(object):
     def __init__(self, dynamics):
         import scipy.linalg 
         # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref) (stage or running cost matrix on states)
-        self.Q = np.diag([3., 3., 6., 4., 4., 8.])
+        # self.Q = np.diag([3., 3., 6., 4., 4., 8.])
+        self.Q = np.diag([3., 3., 6., 4, 4, 8])
+
         # Jinput = (u_k).T * R * (u_k) (stage cost on inputs)
         # [ORIGINAL] self.R = 2 * np.diag(np.array([1,1,0.0002]))
-        self.R = 2 * np.diag(np.array([1,1,0.03]))
+        # self.R = 2 * np.diag(np.array([1,1,0.03]))
+        self.R = 2 * np.diag(np.array([1,1,1]))
+
         # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref) (terminal cost on states)
         self.Qf = scipy.linalg.solve_discrete_are(dynamics.A_k, dynamics.B_k, 
                                                   self.Q, self.R)
+
         # Jdinput = (u_k+1 - u_k).T * dR * (u_k+1 - u_k) (stage cost on input change)
         # [ORIGINAL] self.dR = 0.2 * np.diag(np.array([16,16,2]))
-        self.dR = 0.5 * np.diag(np.array([5,5,0.05]))
+        # self.dR = 0.5 * np.diag(np.array([5,5,0.05]))
+        self.dR = 0.5 * np.diag(np.array([5,5,4]))
 
 # Define linear dynamics
 dynamics = point_mass_dynamics()
@@ -81,8 +89,10 @@ trajectory = Trajectory(dynamics.freq, 2)
 
 # Initial conditions on inputs are set to allow smooth input changes
 F_vec = np.array([0,0,dynamics.m*dynamics.g]).T
-F_z_offset_MPC = 4.7
-F_z_offset_PID = 1.2
+# F_z_offset_MPC = 4.7
+F_z_offset_MPC = 7.4
+# F_z_offset_PID = -2.5
+F_z_offset_PID = 1.5 # 4.67 for quad with cables (approximately)
 
 # Initialize Landing Sight
 L_point = []
@@ -161,19 +171,25 @@ def takeoff_PD():
     global odom_stored_msg, dynamics, costs, F_vec, L_point, PD_controller, F_z_offset_PID
     
     # Initialize input and time
-    T_O_point = np.array([0, 0, 0, 0, 0, 0.6])
+    T_O_point = np.array([0, 0, 0, odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, 1.2])
+    # T_O_point = np.array([0, 0, 0, odom_stored_msg.pose.pose.position.x + 0.5, odom_stored_msg.pose.pose.position.y + 0.5, 1.5])
 
     # Define takeoff trajectory (type: set point)
     takeoff_traj = Trajectory(dynamics.freq, 1)
 
     # Store takeoff position as home for landing purposes
-    L_point = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
-                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+    home = copy.deepcopy(odom_stored_msg)
+    L_point = np.array([home.twist.twist.linear.x, home.twist.twist.linear.y, home.twist.twist.linear.z,
+                        home.pose.pose.position.x, home.pose.pose.position.y, home.pose.pose.position.z])
 
     while not rospy.is_shutdown():
         # Read quadcopter state
         xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+
+        # Slowly increase the offset until desired height is reached
+        F_z_offset_PID = F_z_offset_PID + 6 * 10**(-4)
+        # print("OFF: ", F_z_offset_PID)
 
         # Compute trajectory preview
         preview = takeoff_traj.get_reftraj(0, 1, T_O_point[3:6])
@@ -183,31 +199,42 @@ def takeoff_PD():
 
         # Read first optimal input and send to drone
         F_vec = PD_controller.F_command
+
         send_command(F_z_offset_PID)
 
         # End manouver when desired point is captured
-        if (la.norm(xt - T_O_point) <= 0.05):
+        #print ("H: ",xt[5], "ERR: ",la.norm(xt - T_O_point))
+        #print ("OFFSET: ", F_z_offset_PID)
+
+        if (la.norm(xt - T_O_point) <= 0.1):
             #F = ut
             break
 
 def takeoff():
     global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point, F_z_offset_MPC
-    
+
     # Initialize input and time
-    T_O_point = np.array([0, 0, 0, 0, 0, 0.6])
+    T_O_point = np.array([0, 0, 0, -1.4, -1.6, 1.5])
+    #T_O_point = np.array([0, 0, 0, odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, 1.5])
+
     TO_Time = 0
 
     # Define takeoff trajectory (type: set point)
     takeoff_traj = Trajectory(dynamics.freq, 1)
 
     # Store takeoff position as home for landing purposes
-    L_point = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
-                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+    # L_point = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
+    #                    odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
 
     while not rospy.is_shutdown():
         # Read quadcopter state
         xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
+
+        # Slowly increase the offset until desired height is reached
+        F_z_offset_MPC = F_z_offset_MPC + 2 * 10**(-3)
+        # print("OFF: ", F_z_offset_MPC)
+        # print("H: ",xt[5])
 
         # Compute trajectory preview
         preview = takeoff_traj.get_reftraj(TO_Time, CFTOC_MPC.N, T_O_point[3:6])[0:6] # No need for acceleration here [6:9]
@@ -223,7 +250,12 @@ def takeoff():
         TO_Time += 1
 
         # End manouver when desired point is captured
-        if (la.norm(xt - T_O_point) <= 0.02):
+        # print ("POS: ",xt[3:6])
+        #print ("H: ",xt[5], "ERR: ",la.norm(xt - T_O_point))
+        #print ("OFFSET: ", F_z_offset_MPC)
+
+
+        if (la.norm(xt[3:6] - T_O_point[3:6]) <= 0.1):
             #F = ut
             CFTOC_MPC.xPred = []
             CFTOC_MPC.uPred = []
@@ -234,6 +266,9 @@ def land_PD():
 
     # Define takeoff trajectory (type: set point)
     landing_traj = Trajectory(dynamics.freq, 1)
+
+    # SHIFT LANDING POINT FOR SAFETY AT FIRST
+    # L_point = L_point + np.array([0, 0, 0, 0.5, 0.5, 0.5])
 
     while not rospy.is_shutdown():
         # Read quadcopter state
@@ -250,7 +285,7 @@ def land_PD():
         send_command(F_z_offset_PID)
 
         # Turn off motors when close to home
-        if (la.norm(xt - L_point) <= 0.12):
+        if (la.norm(xt - L_point) <= 0.3):
             F_vec = np.zeros(3)
             send_command(0)
             break
@@ -258,11 +293,14 @@ def land_PD():
 def land():
     global odom_stored_msg, dynamics, costs, CFTOC_MPC, F_vec, L_point, F_z_offset_MPC
     
-    # Initialize input and time
+    # Initialize time
     L_Time = 0
 
     # Define takeoff trajectory (type: set point)
     landing_traj = Trajectory(dynamics.freq, 1)
+
+    # SHIFT LANDING POINT FOR SAFETY AT FIRST
+    L_point = L_point - np.array([0, 0, 0, 0, 0, 0.4])
 
     while not rospy.is_shutdown():
         # Read quadcopter state
@@ -283,7 +321,7 @@ def land():
         L_Time += 1
 
         # Turn off motors when close to home
-        if (la.norm(xt - L_point) <= 0.05):
+        if (la.norm(xt[3:6] - L_point[3:6]) <= 0.3):
             F_vec = np.zeros(3)
             send_command(0)
             break
@@ -327,7 +365,7 @@ def train():
     # ===================== TRAIN w. PID =====================
     # ========================================================
 
-    while True:
+    while PID_Time <= 1200 :
         # Read system state
         xt = np.array([odom_stored_msg.twist.twist.linear.x, odom_stored_msg.twist.twist.linear.y, odom_stored_msg.twist.twist.linear.z,
                        odom_stored_msg.pose.pose.position.x, odom_stored_msg.pose.pose.position.y, odom_stored_msg.pose.pose.position.z])
@@ -337,7 +375,7 @@ def train():
         preview = trajectory.get_reftraj(PID_Time, 1)
 
         # Solve MPC CFTOC problem
-        PD_controller.solve_PD(xt, np.reshape(preview,6)) 
+        PD_controller.solve_PD(xt, np.reshape(preview,9)) 
         
 		# Read first optimal input and send to drone
         F_vec = PD_controller.F_command
@@ -352,6 +390,15 @@ def train():
 
     print("PID Training Complete")
 
+
+    
+
+    #xcl_PID = np.array(xcl_PID)
+    #plot_trajectories(xcl_PID[:,:,0].T)
+
+    #xcl_MPC = np.array(xcl_MPC)
+    #plot_trajectories(xcl_MPC[:,:,0].T)
+    
 def navigate_LMPC():
     global CFTOC_LMPC, trajectory
     global xcl_MPC, ucl_MPC, xcl_PID, ucl_PID
@@ -406,14 +453,18 @@ def navigate_LMPC():
         lmpc.addTrajectory(xcl, ucl)
 
 def main():
-    global flight_mode, odom_stored_msg, pub, rate, CFTOC_MPC
-    global xcl_PID
+    global flight_mode, odom_stored_msg, pub, rate, CFTOC_MPC, trajectory
+    global xcl_PID, xcl_MPC, F_vec
 
     # Setup odometry subscriber
     odom_sub = rospy.Subscriber("/white_falcon/odometry/mocap", Odometry, odom_callback)
     pub = rospy.Publisher('/white_falcon/thrust_force', TwistStamped, queue_size=10)
     rate = rospy.Rate(dynamics.freq) # operating frequency set inside dynamics
     
+    # TURN OFF MOTORS
+    F_vec = np.zeros(3)
+    send_command(0)
+
     # Prompt user to initiate flight
     get_flight_mode()
 
@@ -424,10 +475,13 @@ def main():
             print("TAKEOFF INITIATED...")
             try:
                 takeoff_PD()
+                print("PID CALIBRATION COMPLETE!")
+                takeoff()
+                print("MPC CALIBRATION COMPLETE!")
                 print("TAKEOFF SUCCESSFULL! Starting Hold...")
             except:
                 print("TAKEOFF ABORTED. LANDING...")
-                land_PD()
+                land()
 
         elif (int(flight_mode) == 2):
             #========== TRAIN ===========            
@@ -437,7 +491,7 @@ def main():
                 print("TRAINING SUCCESSFULL! Starting Hold...")
             except:
                 print("TRAINING ABORTED. LANDING...")
-                land_PD()
+                land()
 
         elif (int(flight_mode) == 3):
             #=========== LMPC ===========            
@@ -447,11 +501,11 @@ def main():
                 print("LMPC SUCCESSFULL! Starting Hold...")
             except:
                 print("LMPC ABORTED. LANDING...")
-                land_PD()
+                land()
 
         elif (int(flight_mode) == 4):
             #========= LANDING =========
-            land_PD()
+            land()
             print("LANDING SUCCESSFULL!")
             break 
 
@@ -469,34 +523,46 @@ def main():
         CFTOC_MPC.uPred = []
 
     xcl_PID = np.array(xcl_PID)
-    print("SHAPE: ", xcl_PID[:,:,0].shape)
-    plot_trajectories(xcl_PID[:,:,0].T)
+    xcl_MPC = np.array(xcl_MPC)
+
+    # Print comparisons with reference
+    plot_trajectories(xcl_PID[:,:,0].T, 1, xcl_MPC[:,:,0].T, trajectory.get_reftraj(0, 1200))
             
 # =============================================================================
 # ==============================    PLOTTING     ==============================
 # =============================================================================
 
-def plot_trajectories(x):
+def plot_trajectories(x, comparison=0, x1=[],ref=[]):
     
     # 2D X-Y plot
     fig = plt.figure(1, figsize=(18,6))
     plt.subplot(1,3,1)
     plt.plot(  x[3,:]  , x[4,:],'blue')
-    plt.scatter(x[3,0] , x[4,0], s =15, c='red')
+    if comparison==1:
+        plt.plot(  x1[3,:]  , x1[4,:],'red')
+        plt.plot(  ref[3,:]  , ref[4,:],'green')
+
     plt.title('X vs. Y')
 
     # 2D X-Z plot
     plt.subplot(1,3,2)
     plt.plot(  x[3,:]  , x[5,:],'blue')
-    plt.scatter(x[3,0] , x[5,0], s =15, c='red')
+    if comparison==1:
+        plt.plot(  x1[3,:]  , x1[5,:],'red')
+        plt.plot(  ref[3,:]  , ref[5,:],'green')
+
     plt.title('X vs. Z')
 
     # 2D Y-Z plot
     plt.subplot(1,3,3)
     plt.plot(  x[4,:]  , x[5,:],'blue')
-    plt.scatter(x[4,0] , x[5,0], s =15, c='red')
+    if comparison==1:
+        plt.plot(  x1[4,:]  , x1[5,:],'red')
+        plt.plot(  ref[4,:]  , ref[5,:],'green')
+
     plt.title('Y vs. Z')
-    plt.legend(['Reference Trajectory','Open Loop (CFTOC)','Closed Loop (MPC)','Initial Condition (x0)'])
+    if comparison==1:
+        plt.legend(['PID','MPC','REF'])
     plt.show()
 
     # 2D X-T plot
@@ -506,6 +572,10 @@ def plot_trajectories(x):
     #     hor[i] = i
     plt.subplot(2,3,1)
     plt.plot( x[3,:],'blue')
+    if comparison==1:
+        plt.plot( x1[3,:],'red')
+        plt.plot( ref[3,:],'green')
+
     plt.title('X vs. T')
 
     # 2D X-T plot
@@ -515,6 +585,9 @@ def plot_trajectories(x):
     #     hor[i] = i
     plt.subplot(2,3,2)
     plt.plot( x[4,:],'blue')
+    if comparison==1:
+        plt.plot( x1[4,:],'red')
+        plt.plot( ref[4,:],'green')
     plt.title('Y vs. T')
         
     # 2D X-T plot
@@ -524,9 +597,41 @@ def plot_trajectories(x):
     #     hor[i] = i
     plt.subplot(2,3,3)
     plt.plot( x[5,:],'blue')
+    if comparison==1:
+        plt.plot( x1[5,:],'red')
+        plt.plot( ref[5,:],'green')
     plt.title('Z vs. T')
-    plt.show()    
+    if comparison==1:
+        plt.legend(['PID','MPC','REF'])
+    plt.show()  
+
+    # 3D X-Y-Z plot
+    fig = plt.figure(3, figsize=(8,8))
+    ax = plt.axes(projection='3d')
+    plt.plot(ref[3,:], ref[4,:], ref[5,:], 'green')
+    plt.plot( x1[3,:]  ,  x1[4,:],   x1[5,:], 'red')
+    plt.plot(  x[3,:]  , x[4,:]   , x[5,:]  ,'blue')
+    plt.xlabel("X")
+    plt.ylabel("Y")
+    plt.legend(['Reference Trajectory','PID','MPC'])
     
+
+    # 2D E-T plot
+    if comparison==1:
+        fig = plt.figure(4, figsize=(18,6))  
+        plt.plot( ref[3,0:x[3,:].size] - x[3,:],'blue')
+        plt.plot( ref[3,0:x1[3,:].size] - x1[3,:],'red')
+        plt.plot( ref[4,0:x[4,:].size] - x[4,:],'--blue')
+        plt.plot( ref[4,0:x1[4,:].size] - x1[4,:],'--red')
+        plt.plot( ref[5,0:x[5,:].size] - x[5,:],':blue')
+        plt.plot( ref[5,0:x1[5,:].size] - x1[5,:],':red')
+
+        plt.legend(['x_PID','x_MPC','y_PID','y_MPC','z_PID','z_MPC'])
+
+        plt.title('Error vs. T')
+        plt.show()  
+
+
     
 # =============================================================================    
 # =============================================================================
@@ -541,9 +646,4 @@ if __name__ == '__main__':
         #plot_trajectories()
         
     except rospy.ROSInterruptException:
-        pass    
- 
-    
-        
-
-
+        pass

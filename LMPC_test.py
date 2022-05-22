@@ -1,5 +1,5 @@
 """
-Run this script to test MPC and LMPC position controllers in Python.
+Run this script to test PID, MPC and LMPC position controllers in Python.
 """
 import sys
 import numpy as np
@@ -44,14 +44,14 @@ class cost_matrices(object):
     def __init__(self, dynamics):
         import scipy.linalg 
         # J_k = (x_k - x_k_ref).T * Q * (x_k - x_k_ref) (stage or running cost matrix on states)
-        self.Q = np.diag([3., 3., 6., 4., 4., 8.])
+        self.Q = np.diag([3., 3., 12., 4., 4., 12.])
         # Jinput = (u_k).T * R * (u_k) (stage cost on inputs)
-        self.R = 2 * np.diag(np.array([1,1,0.0002]))
+        self.R = 2 * np.diag(np.array([1,1,0.0004]))
         # Jf = (x_N - x_N_ref).T * Qf * (x_N - x_N_ref) (terminal cost on states)
         self.Qf = scipy.linalg.solve_discrete_are(dynamics.A_k, dynamics.B_k, 
                                                   self.Q, self.R)
         # Jdinput = (u_k+1 - u_k).T * dR * (u_k+1 - u_k) (stage cost on input change)
-        self.dR = 0.2 * np.diag(np.array([16,16,2]))
+        self.dR = 0.2 * np.diag(np.array([16,16,3]))
 
 def main():
     
@@ -140,7 +140,7 @@ def main():
         CFTOC_MPC.solve_MPC(xt, ut, preview) 
         
 		# Read input
-        ut = CFTOC_MPC.u_pred[:,0]
+        ut = CFTOC_MPC.u_pred[:,0]+np.array([-0.1,-0.2,-2.49])
         ucl_feasible.append(ut)
         
         # Run system dynamics
@@ -150,8 +150,8 @@ def main():
         print("CFTOC #", MPC_Time-1)
         
         # TROUBLESHOOT
-        if MPC_Time==1300:
-            plot_trajectories(np.array(xcl_feasible))
+        # if MPC_Time==1300:
+        #     plot_trajectories(np.array(xcl_feasible))
 
         # Stop running when finish line is crossed from below
         if trajectory.crossedFinish(np.reshape((xcl_feasible)[-1],(6,1)), MPC_Time) == True:
@@ -285,4 +285,3 @@ def plot_trajectories(x):
 
 if __name__== "__main__":
     main()
-
